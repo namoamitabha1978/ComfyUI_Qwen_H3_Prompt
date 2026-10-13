@@ -9,3 +9,13 @@ __pycache__/
 bin/
 runtime/
 runtime_config.json
+
+# 二进制可执行文件 / 库（不推送到仓库；图片 *.png/*.jpg 保留）
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+*.bin
+*.zip
