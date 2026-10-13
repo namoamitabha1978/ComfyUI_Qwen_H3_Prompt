@@ -119,6 +119,21 @@ python install_runtime.py --backend cuda --build-from-source
 - 包含 `nvcc` 的 NVIDIA CUDA Toolkit，`nvcc` 位于 `PATH` 中或已经设置 `CUDA_HOME`；
 - Git、CMake、C 编译器和 C++ 编译器，例如 Ubuntu/Debian 的 `git cmake build-essential`。
 
+### 运行时自动检测与回退（runtime detection）
+
+节点不再强制依赖独立的 `llama-server`。启动时会自动检测当前 ComfyUI Python 环境里可用的 llama.cpp 运行时，并按下述优先级选择；启动失败会自动降级到下一个可用运行时，全程在日志中记录选择结果：
+
+1. **llama-cpp-python（CUDA，进程内推理）**——推荐。如果 `llama_cpp` 已安装到 ComfyUI 的 Python 环境（含 `ggml-cuda.dll`），节点直接用它加载 GGUF 与 mmproj，无需下载独立运行时。这也是借用 `comfyui-minimax-h3-prompt-enhancer-T8` 的本地 Qwen 方案。
+2. **独立 llama-server（standalone）**——由 `install_runtime.py` 安装的官方 llama.cpp `b11115` 运行时，带 `--fit` 动态显存管理。
+3. 两者都不可用时才报错，并给出安装指引。
+
+几点说明：
+
+- 检测结果可通过 `runtime_status()` 查看（`backend/version/gpu_offload/platform` 等），节点每次运行时也会在 `comfyui.log` 打印 `[Qwen H3] Runtime detection ...` 与 `[Qwen H3] Selected llama runtime: ...`。
+- 走 llama-cpp-python 后端时，节点会读取 GGUF 头部元数据估算 KV 缓存规模，按可用显存**自动封顶有效 context**，避免 context 过大导致模型整体回退到 CPU（慢）或爆显存。日志中 `caps context N -> M` 即表示封顶后的值。
+- 同一后端按调用切换 `think_mode` 时，llama-cpp-python 会重建一次模型实例以保证思考/非思考输出正确（日志可见对应加载耗时）。
+- 已检测到独立运行时但无需安装时，`runtime/.downloads` 下的已下载缓存可安全删除以释放磁盘空间。
+
 
 
 ## 节点
@@ -198,6 +213,8 @@ Qwen 会根据用户提示词、目标时长、参考图片以及参考视频的
 
 ## 显存和生命周期
 若关闭 `force unload model`，内置服务会继续占用约 20 GB 显存，模型配置不变时下一次可直接复用；再次开启并运行节点、模型配置发生变化或退出 ComfyUI 时会终止驻留服务。
+
+使用 llama-cpp-python 后端时，驻留占用取决于所选模型与封顶后的 context（例如 8 GB 显存的 RTX 2070 Super 加载 Qwen3.8-9B-Q4_K_M + mmproj，模型+KV 约占用 6.2 GB）；`force unload model` 关闭时可复用驻留实例以加快后续运行。
 
 
 ## 上游来源与许可证

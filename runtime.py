@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import socket
@@ -13,7 +14,16 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from .runtime_detect import (
+    PythonRuntimeSpec,
+    detect_python_runtime,
+    detect_standalone_runtime,
+    runtime_status,
+)
+from .runtime_python import PythonLlamaServer, PythonRuntimeError
 
+
+LOGGER = logging.getLogger("ComfyUI.QwenH3Prompt.runtime")
 NODE_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = NODE_ROOT / "runtime_config.json"
 LLAMA_SEED_MODULUS = 0xFFFFFFFF
@@ -344,39 +354,117 @@ class LlamaServer:
 
 
 class LlamaServerManager:
-    """Owns the one llama.cpp child process used by this custom node."""
+    """Owns the one llama.cpp inference backend used by this custom node.
+
+    运行时选择：优先 llama-cpp-python（CUDA 加速、用户指定的借用方案），
+    其次独立 llama-server（standalone，官方 --fit 路径）。启动失败时自动
+    降级到下一个可用运行时。选择结果在 acquire 时记录，可用
+    ``runtime_status()`` 查看。
+    """
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._server: LlamaServer | None = None
-        self._key: tuple[Path, Path, int, Path, str, str] | None = None
+        self._server: LlamaServer | PythonLlamaServer | None = None
+        self._key: tuple[object, ...] | None = None
+
+    def _select_specs(
+        self,
+    ) -> tuple[RuntimeSpec | None, PythonRuntimeSpec | None]:
+        standalone_spec: RuntimeSpec | None = None
+        try:
+            standalone_spec = load_runtime_spec()
+        except RuntimeError:
+            standalone_spec = None
+        python_spec = detect_python_runtime()
+        return standalone_spec, python_spec
 
     def acquire(
         self, model: Path, mmproj: Path, context_size: int = 32768
-    ) -> tuple[LlamaServer, bool]:
-        runtime_spec = load_runtime_spec()
-        key = (
-            model.resolve(),
-            mmproj.resolve(),
-            context_size,
-            runtime_spec.executable.resolve(),
-            runtime_spec.platform_name,
-            runtime_spec.backend,
+    ) -> tuple[LlamaServer | PythonLlamaServer, bool]:
+        standalone_spec, python_spec = self._select_specs()
+        detection = runtime_status()
+        LOGGER.info(
+            "[Qwen H3] Runtime detection | standalone=%s(%s) | llama-cpp-python=%s(%s) | gpu_offload=%s",
+            standalone_spec is not None,
+            standalone_spec.backend if standalone_spec is not None else "n/a",
+            python_spec is not None,
+            python_spec.version if python_spec is not None else "n/a",
+            detection.get("gpu_offload_available"),
         )
+        if standalone_spec is None and python_spec is None:
+            warnings = " ".join(detection.get("warnings", [])) or "no runtime detected"
+            raise RuntimeError(
+                "No usable llama.cpp runtime was found. Install a standalone runtime by "
+                "running install_runtime.py from the custom node directory, or install "
+                f"llama-cpp-python in the ComfyUI Python environment. {warnings}"
+            )
+
+        attempts: list[tuple[str, RuntimeSpec | PythonRuntimeSpec]] = []
+        if python_spec is not None:
+            attempts.append(("llama-cpp-python", python_spec))
+        if standalone_spec is not None:
+            attempts.append(("standalone", standalone_spec))
+
         with self._lock:
-            if self._server is not None and self._key == key and self._server.is_running:
+            if (
+                self._server is not None
+                and self._key == (
+                    model.resolve(),
+                    mmproj.resolve(),
+                    context_size,
+                    attempts[0][0],
+                    getattr(attempts[0][1], "backend", ""),
+                )
+                and self._server.is_running
+            ):
                 return self._server, False
 
             self.release()
-            server = LlamaServer(model, mmproj, context_size, runtime_spec)
-            try:
-                server.start()
-            except Exception:
-                server.stop()
-                raise
-            self._server = server
-            self._key = key
-            return server, True
+            last_error: Exception | None = None
+            for kind, spec in attempts:
+                try:
+                    if kind == "standalone":
+                        server: LlamaServer | PythonLlamaServer = LlamaServer(
+                            model, mmproj, context_size, spec  # type: ignore[arg-type]
+                        )
+                    else:
+                        server = PythonLlamaServer(
+                            model, mmproj, context_size, spec  # type: ignore[arg-type]
+                        )
+                    server.start()
+                    self._server = server
+                    self._key = (
+                        model.resolve(),
+                        mmproj.resolve(),
+                        context_size,
+                        kind,
+                        server.backend,
+                    )
+                    LOGGER.info(
+                        "[Qwen H3] Selected llama runtime: %s (backend=%s)",
+                        kind,
+                        server.backend,
+                    )
+                    return server, True
+                except Exception as error:  # noqa: BLE001
+                    last_error = error
+                    LOGGER.warning(
+                        "[Qwen H3] Runtime '%s' failed to start (%s: %s), trying next.",
+                        kind,
+                        type(error).__name__,
+                        error,
+                    )
+                    try:
+                        server.stop()  # noqa: F821
+                    except Exception:  # noqa: BLE001
+                        pass
+            message = (
+                "All llama.cpp runtimes failed to start. "
+                f"Tried: {', '.join(k for k, _ in attempts)}."
+            )
+            if last_error is not None:
+                message += f" Last error: {type(last_error).__name__}: {last_error}"
+            raise RuntimeError(message)
 
     def release(self) -> None:
         with self._lock:
@@ -384,4 +472,7 @@ class LlamaServerManager:
             self._server = None
             self._key = None
             if server is not None:
-                server.stop()
+                try:
+                    server.stop()
+                except Exception:  # noqa: BLE001
+                    LOGGER.debug("Error while stopping llama runtime", exc_info=True)
