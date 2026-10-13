@@ -380,10 +380,16 @@ class QwenH3Prompt(io.ComfyNode):
                     advanced=True,
                     tooltip="Frames sampled from each second of every reference video. Frames from the same second are sent as one chronological contact sheet.",
                 ),
+                io.Boolean.Input(
+                    "force_unload_model",
+                    display_name="force unload model",
+                    default=True,
+                    tooltip="On stops the node's llama.cpp server and clears its VRAM and system memory after each run. Errors always force an unload.",
+                ),
                 # --- 运行时/推理参数（带帮助说明） ---
                 io.Combo.Input(
                     "runtime_backend",
-                    options=["auto", "vulkan", "cuda", "llama-cpp-python"],
+                    options=["auto", "vulkan", "cuda", "llama-cpp-python", True],
                     default="auto",
                     tooltip=(
                         "推理后端选择。\n"
@@ -453,12 +459,6 @@ class QwenH3Prompt(io.ComfyNode):
                         "显存占用；off：兼容性最好但更慢（且会同时关闭量化 KV 缓存，内存占用更高）。"
                     ),
                 ),
-                io.Boolean.Input(
-                    "force_unload_model",
-                    display_name="force unload model",
-                    default=True,
-                    tooltip="On stops the node's llama.cpp server and clears its VRAM and system memory after each run. Errors always force an unload.",
-                ),
                 io.Autogrow.Input(
                     "reference_images",
                     optional=True,
@@ -526,6 +526,23 @@ class QwenH3Prompt(io.ComfyNode):
                 reasoning_effort,
             )
             reasoning_effort = "medium"
+        # 兼容旧工作流错位/遗留值：把运行时选项归一化到合法值，避免错位布尔值导致崩溃。
+        if runtime_backend not in ("auto", "vulkan", "cuda", "llama-cpp-python"):
+            LOGGER.info("[Qwen H3] Normalizing runtime_backend=%r to 'auto'", runtime_backend)
+            runtime_backend = "auto"
+        if flash_attention not in ("auto", "on", "off"):
+            LOGGER.info("[Qwen H3] Normalizing flash_attention=%r to 'auto'", flash_attention)
+            flash_attention = "auto"
+        if n_gpu_layers not in ("auto", "-1"):
+            LOGGER.info("[Qwen H3] Normalizing n_gpu_layers=%r to 'auto'", n_gpu_layers)
+            n_gpu_layers = "auto"
+        try:
+            context_size = int(context_size)
+            fit_target_mib = int(fit_target_mib)
+        except (TypeError, ValueError):
+            context_size = 32768
+            fit_target_mib = 1536
+        fit_enabled = bool(fit_enabled)
         content = None
         messages = None
         repair_messages = None

@@ -138,7 +138,7 @@ python install_runtime.py --backend cuda --build-from-source
 
 节点在 UI 上提供 6 个「最优默认」运行时选项，每个都带悬浮帮助说明（建议保持默认值）：
 
-- **runtime_backend（推理后端）**：`auto`（默认，自动检测，优先独立 llama-server，其次 llama-cpp-python）、`vulkan`（强制独立 Vulkan 运行时，`--fit` 显存自适应，低显存推荐）、`cuda`（强制独立 CUDA 运行时，需先 `python install_runtime.py --backend cuda` 安装，未安装时自动回退到 llama-cpp-python 并告警）、`llama-cpp-python`（强制进程内 CUDA 后端）。
+- **runtime_backend（推理后端）**：`auto`（默认，自动检测，优先独立 llama-server，其次 llama-cpp-python）、`vulkan`（强制独立 Vulkan 运行时，`--fit` 显存自适应，低显存推荐）、`cuda`（强制独立 CUDA 运行时，需先 `python install_runtime.py --backend cuda` 安装，未安装时自动回退到 llama-cpp-python 并告警）、`llama-cpp-python`（强制进程内 CUDA 后端）。新选项追加在输入列表末尾，旧工作流自动补默认值；为兼容旧工作流保存的错位布尔值，`True` 会被归一化为 `auto`。
 - **context_size（上下文长度）**：默认 `32768`。H3 带图工作流需 8K+；standalone `--fit` 下可安全保持 32768，llama-cpp-python 会按显存自适应，设大值不会被浪费。
 - **fit_enabled（显存自适应 --fit）**：默认开启。把部分层溢出到系统内存以支撑大 context，8GB 显存建议保持开启（仅独立运行时生效）。
 - **fit_target_mib（--fit 显存目标）**：默认 `1536` MiB，8GB 显存推荐值（仅独立运行时生效）。
