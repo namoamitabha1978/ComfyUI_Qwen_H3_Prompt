@@ -199,11 +199,17 @@ class PythonLlamaServer:
         mmproj: Path,
         context_size: int = 32768,
         runtime_spec: PythonRuntimeSpec | None = None,
+        n_gpu_layers: str | None = None,
     ):
         self.model = model
         self.mmproj = mmproj
         self.context_size = int(context_size)
         self.runtime_spec = runtime_spec or detect_python_runtime() or PythonRuntimeSpec()
+        try:
+            digits = n_gpu_layers.lstrip("-") if n_gpu_layers else ""
+            self.n_gpu_layers = int(n_gpu_layers) if digits.isdigit() else -1
+        except (AttributeError, ValueError):
+            self.n_gpu_layers = -1
         self.backend = "llama-cpp-python"
         self.port = 0  # 进程内推理，无 HTTP 端口
         self.llm: Any = None
@@ -303,7 +309,7 @@ class PythonLlamaServer:
             llama_options: dict[str, Any] = {
                 "model_path": str(self.model),
                 "chat_handler": handler,
-                "n_gpu_layers": -1,
+                "n_gpu_layers": self.n_gpu_layers,
                 "n_ctx": effective_ctx,
                 "verbose": False,
             }

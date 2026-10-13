@@ -134,6 +134,19 @@ python install_runtime.py --backend cuda --build-from-source
 - 同一后端按调用切换 `think_mode` 时，llama-cpp-python 会重建一次模型实例以保证思考/非思考输出正确（日志可见对应加载耗时）。
 - 已检测到独立运行时但无需安装时，`runtime/.downloads` 下的已下载缓存可安全删除以释放磁盘空间。
 
+### 节点 UI 推理参数（带帮助说明）
+
+节点在 UI 上提供 6 个「最优默认」运行时选项，每个都带悬浮帮助说明（建议保持默认值）：
+
+- **runtime_backend（推理后端）**：`auto`（默认，自动检测，优先独立 llama-server，其次 llama-cpp-python）、`vulkan`（强制独立 Vulkan 运行时，`--fit` 显存自适应，低显存推荐）、`cuda`（强制独立 CUDA 运行时，需先 `python install_runtime.py --backend cuda` 安装，未安装时自动回退到 llama-cpp-python 并告警）、`llama-cpp-python`（强制进程内 CUDA 后端）。
+- **context_size（上下文长度）**：默认 `32768`。H3 带图工作流需 8K+；standalone `--fit` 下可安全保持 32768，llama-cpp-python 会按显存自适应，设大值不会被浪费。
+- **fit_enabled（显存自适应 --fit）**：默认开启。把部分层溢出到系统内存以支撑大 context，8GB 显存建议保持开启（仅独立运行时生效）。
+- **fit_target_mib（--fit 显存目标）**：默认 `1536` MiB，8GB 显存推荐值（仅独立运行时生效）。
+- **n_gpu_layers（GPU 卸载层数）**：默认 `auto`（由运行时按显存决定），可选 `-1`（全部层上 GPU，最快但显存占用最高）。
+- **flash_attention（Flash Attention）**：默认 `auto`。注意：`off` 会同时关闭量化 KV 缓存（q8_0）以保持兼容，内存占用更高；`on/auto` 才启用量化缓存以支撑 8GB 卡的大 context（仅独立运行时生效）。
+
+后端参数会覆盖 `runtime_config.json` 里的默认值；切换后端/参数时节点自动重建对应的 llama-server 实例。
+
 
 
 ## 节点

@@ -380,6 +380,79 @@ class QwenH3Prompt(io.ComfyNode):
                     advanced=True,
                     tooltip="Frames sampled from each second of every reference video. Frames from the same second are sent as one chronological contact sheet.",
                 ),
+                # --- 运行时/推理参数（带帮助说明） ---
+                io.Combo.Input(
+                    "runtime_backend",
+                    options=["auto", "vulkan", "cuda", "llama-cpp-python"],
+                    default="auto",
+                    tooltip=(
+                        "推理后端选择。\n"
+                        "auto（推荐）：自动检测并选择——优先独立 llama-server（standalone，当前为 "
+                        "Vulkan，配合 --fit 可支撑大 context），其次 llama-cpp-python。\n"
+                        "vulkan：强制使用独立 Vulkan 运行时（--fit 显存自适应，低显存下把部分层溢出到 "
+                        "系统内存以支撑大 context，8GB 显存推荐；当前已安装）。\n"
+                        "cuda（NV，英伟达 CUDA）：强制使用独立 CUDA 运行时（需先运行 "
+                        "install_runtime.py --backend cuda 安装；未安装时自动回退到 llama-cpp-python）。\n"
+                        "llama-cpp-python：强制使用进程内 CUDA 后端（借用 T8 方案；CUDA 快，但全量上 "
+                        "GPU 时 context 受显存限制，超大工作流可能回退 CPU）。"
+                    ),
+                ),
+                io.Int.Input(
+                    "context_size",
+                    default=32768,
+                    min=2048,
+                    max=131072,
+                    step=2048,
+                    advanced=True,
+                    tooltip=(
+                        "上下文长度（token）。H3 带图工作流（图片 token + 长系统提示 + 8192 输出）需 8K+。"
+                        "越大越能容纳长输入/长输出，但显存/内存占用越高、推理越慢。\n"
+                        "standalone（--fit）下推荐保持 32768；llama-cpp-python 后端会按可用显存自动调整，"
+                        "此处设大值不会被浪费。8GB 显存 + 32GB 内存建议默认 32768。"
+                    ),
+                ),
+                io.Boolean.Input(
+                    "fit_enabled",
+                    display_name="fit_enabled",
+                    default=True,
+                    tooltip=(
+                        "显存自适应（--fit，仅独立运行时生效）：把部分层溢出到系统内存，低显存也能支撑大 "
+                        "context。8GB 显存强烈建议保持开启；关闭后全部依赖显存，大 context 可能放不下。"
+                    ),
+                ),
+                io.Int.Input(
+                    "fit_target_mib",
+                    default=1536,
+                    min=256,
+                    max=8192,
+                    step=128,
+                    advanced=True,
+                    tooltip=(
+                        "--fit 的显存目标（MiB，仅独立运行时生效）：预留这么多显存给 KV 缓存与计算，其余 "
+                        "层溢出到系统内存。值越小越激进（溢出更多、更稳但更慢）；值越大越依赖显存（更快但 "
+                        "8GB 卡可能放不下大 context）。8GB 显存推荐 1536。"
+                    ),
+                ),
+                io.Combo.Input(
+                    "n_gpu_layers",
+                    options=["auto", "-1"],
+                    default="auto",
+                    advanced=True,
+                    tooltip=(
+                        "GPU 卸载层数。auto（推荐）：由运行时根据显存自动决定；-1：全部层上 GPU（最快，"
+                        "但显存占用最高，8GB 卡下大 context 可能溢出）。standalone 与 llama-cpp-python 均生效。"
+                    ),
+                ),
+                io.Combo.Input(
+                    "flash_attention",
+                    options=["auto", "on", "off"],
+                    default="auto",
+                    advanced=True,
+                    tooltip=(
+                        "Flash Attention（仅独立运行时生效）。auto（推荐）：由运行时自动检测；on：加速并降低 "
+                        "显存占用；off：兼容性最好但更慢（且会同时关闭量化 KV 缓存，内存占用更高）。"
+                    ),
+                ),
                 io.Boolean.Input(
                     "force_unload_model",
                     display_name="force unload model",
@@ -433,6 +506,12 @@ class QwenH3Prompt(io.ComfyNode):
         seed,
         max_tokens,
         video_sample_frames_per_sec,
+        runtime_backend,
+        context_size,
+        fit_enabled,
+        fit_target_mib,
+        n_gpu_layers,
+        flash_attention,
         force_unload_model,
         reference_images=None,
         reference_videos=None,
@@ -508,7 +587,16 @@ class QwenH3Prompt(io.ComfyNode):
                     model.name,
                     projector.name,
                 )
-                server, loaded_new = SERVER_MANAGER.acquire(model, projector)
+                server, loaded_new = SERVER_MANAGER.acquire(
+                    model,
+                    projector,
+                    context_size=int(context_size),
+                    backend=runtime_backend,
+                    fit=bool(fit_enabled),
+                    fit_target_mib=int(fit_target_mib),
+                    n_gpu_layers=n_gpu_layers,
+                    flash_attention=flash_attention,
+                )
                 LOGGER.info(
                     "[Qwen H3] Model loading complete | %s | platform=%s | backend=%s | port=%d | elapsed %.2f s",
                     "new model loaded" if loaded_new else "resident model reused",

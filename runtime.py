@@ -154,11 +154,30 @@ class LlamaServer:
         mmproj: Path,
         context_size: int = 32768,
         runtime_spec: RuntimeSpec | None = None,
+        n_gpu_layers: str | None = None,
+        flash_attention: str | None = None,
+        fit: bool | None = None,
+        fit_target_mib: int | None = None,
     ):
         self.model = model
         self.mmproj = mmproj
         self.context_size = context_size
         self.runtime_spec = runtime_spec or load_runtime_spec()
+        # UI 可覆盖 runtime_config.json 里的默认参数；未指定时回退到 spec 值。
+        self.n_gpu_layers = (
+            n_gpu_layers if n_gpu_layers is not None else self.runtime_spec.n_gpu_layers
+        )
+        self.flash_attention = (
+            flash_attention
+            if flash_attention is not None
+            else self.runtime_spec.flash_attention
+        )
+        self.fit = fit if fit is not None else self.runtime_spec.fit
+        self.fit_target_mib = (
+            fit_target_mib
+            if fit_target_mib is not None
+            else self.runtime_spec.fit_target_mib
+        )
         self.executable = self.runtime_spec.executable
         # Keep the child working directory outside the runtime payload. Some Windows
         # installs inherit restrictive ACLs on the extracted runtime directory even
@@ -229,13 +248,9 @@ class LlamaServer:
             "--parallel",
             "1",
             "--n-gpu-layers",
-            self.runtime_spec.n_gpu_layers,
+            self.n_gpu_layers,
             "--flash-attn",
-            self.runtime_spec.flash_attention,
-            "--cache-type-k",
-            "q8_0",
-            "--cache-type-v",
-            "q8_0",
+            self.flash_attention,
             "--image-min-tokens",
             "1024",
             "--image-max-tokens",
@@ -243,13 +258,17 @@ class LlamaServer:
             "--jinja",
             "--no-webui",
         ]
-        if self.runtime_spec.fit:
+        # 量化 KV 缓存（q8_0）是支撑 8GB 卡大 context 的关键；但它要求 flash_attn 必须开启，
+        # 因此当用户选择 flash_attention=off 时，必须同时去掉量化缓存参数，否则模型加载失败。
+        if self.flash_attention != "off":
+            arguments.extend(["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"])
+        if self.fit:
             arguments.extend(
                 [
                     "--fit",
                     "on",
                     "--fit-target",
-                    str(self.runtime_spec.fit_target_mib),
+                    str(self.fit_target_mib),
                 ]
             )
         env = build_runtime_environment(self.runtime_spec)
@@ -379,7 +398,15 @@ class LlamaServerManager:
         return standalone_spec, python_spec
 
     def acquire(
-        self, model: Path, mmproj: Path, context_size: int = 32768
+        self,
+        model: Path,
+        mmproj: Path,
+        context_size: int = 32768,
+        backend: str = "auto",
+        fit: bool | None = None,
+        fit_target_mib: int | None = None,
+        n_gpu_layers: str | None = None,
+        flash_attention: str | None = None,
     ) -> tuple[LlamaServer | PythonLlamaServer, bool]:
         standalone_spec, python_spec = self._select_specs()
         detection = runtime_status()
@@ -399,15 +426,34 @@ class LlamaServerManager:
                 f"llama-cpp-python in the ComfyUI Python environment. {warnings}"
             )
 
+        # 依据 UI 的「推理后端」选项决定尝试顺序与范围。
+        backend_choice = (backend or "auto").strip().lower()
         attempts: list[tuple[str, RuntimeSpec | PythonRuntimeSpec]] = []
-        # 优先独立 llama-server（standalone，官方 --fit 路径）：在低显存（如 8GB）下
-        # 能通过把部分层溢出到系统内存来支撑大 context（H3 带图工作流需 8K+ 上下文）。
-        # llama-cpp-python 全量上 GPU 时 context 被显存限制在 3~4K，超过则整体掉 CPU
-        # （9B CPU 极慢），故仅作兜底。启动失败自动尝试下一个。
-        if standalone_spec is not None:
-            attempts.append(("standalone", standalone_spec))
-        if python_spec is not None:
-            attempts.append(("llama-cpp-python", python_spec))
+        if backend_choice in ("auto", "vulkan", "cuda"):
+            if standalone_spec is not None:
+                spec_backend = standalone_spec.backend
+                if backend_choice == "auto" or spec_backend == backend_choice:
+                    attempts.append(("standalone", standalone_spec))
+                else:
+                    LOGGER.warning(
+                        "[Qwen H3] UI requested standalone backend '%s' but installed "
+                        "standalone runtime is '%s'; falling back to llama-cpp-python.",
+                        backend_choice,
+                        spec_backend,
+                    )
+        if backend_choice in ("auto", "llama-cpp-python") or not attempts:
+            if python_spec is not None:
+                attempts.append(("llama-cpp-python", python_spec))
+
+        if not attempts:
+            raise RuntimeError(
+                f"Backend '{backend_choice}' is not available on this machine. "
+                "Available: standalone=" + (
+                    standalone_spec.backend if standalone_spec is not None else "none"
+                ) + ", llama-cpp-python=" + (
+                    "yes" if python_spec is not None else "no"
+                )
+            )
 
         with self._lock:
             if (
@@ -416,8 +462,13 @@ class LlamaServerManager:
                     model.resolve(),
                     mmproj.resolve(),
                     context_size,
+                    backend_choice,
                     attempts[0][0],
                     getattr(attempts[0][1], "backend", ""),
+                    n_gpu_layers,
+                    flash_attention,
+                    fit,
+                    fit_target_mib,
                 )
                 and self._server.is_running
             ):
@@ -429,11 +480,22 @@ class LlamaServerManager:
                 try:
                     if kind == "standalone":
                         server: LlamaServer | PythonLlamaServer = LlamaServer(
-                            model, mmproj, context_size, spec  # type: ignore[arg-type]
+                            model,
+                            mmproj,
+                            context_size,
+                            spec,  # type: ignore[arg-type]
+                            n_gpu_layers=n_gpu_layers,
+                            flash_attention=flash_attention,
+                            fit=fit,
+                            fit_target_mib=fit_target_mib,
                         )
                     else:
                         server = PythonLlamaServer(
-                            model, mmproj, context_size, spec  # type: ignore[arg-type]
+                            model,
+                            mmproj,
+                            context_size,
+                            spec,  # type: ignore[arg-type]
+                            n_gpu_layers=n_gpu_layers,
                         )
                     server.start()
                     self._server = server
