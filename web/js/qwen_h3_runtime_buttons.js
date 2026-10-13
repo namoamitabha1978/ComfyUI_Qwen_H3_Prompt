@@ -69,9 +69,16 @@ function addButtons(node) {
   if (node._qwenH3Buttons) return;
   node._qwenH3Buttons = true;
 
-  const status = node.addWidget("text", "runtime_status", "", () => {});
+  // 所有新增控件都必须不序列化进工作流 JSON，否则会污染 widgets_values
+  // 导致旧工作流在 ComfyUI 中再次发生索引错位。
+  const nonSerializing = (w) => {
+    w.serializeValue = () => undefined;
+    w.serialize = () => undefined;
+    return w;
+  };
+
+  const status = nonSerializing(node.addWidget("text", "runtime_status", "", () => {}));
   status.disabled = true;
-  status.serializeValue = () => undefined;
 
   const setStatus = (v) => {
     try {
@@ -150,4 +157,10 @@ function addButtons(node) {
   node.addWidget("button", "🔍 检测当前 runtime", null, detect);
   node.addWidget("button", "🖥️ 安装 NV (CUDA) runtime", null, () => install("cuda", "NV(CUDA)"));
   node.addWidget("button", "🖥️ 安装 Vulkan runtime", null, () => install("vulkan", "Vulkan"));
+  // 让末尾 3 个按钮也不序列化（保持健壮性）
+  for (const w of node.widgets) {
+    if (w.type === "button" && ["🔍 检测当前 runtime", "🖥️ 安装 NV (CUDA) runtime", "🖥️ 安装 Vulkan runtime"].includes(w.name)) {
+      nonSerializing(w);
+    }
+  }
 }
