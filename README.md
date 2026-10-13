@@ -34,6 +34,15 @@ git clone https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt.git
   对于16G显存的设备，推荐 https://huggingface.co/soyaakinohara/qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf 。    
   也可以自行下载其他与llama-server兼容的Qwen3.8权重。
 
+## 示例工作流（Example Workflow）
+
+`example workflow/` 目录提供可直接拖入 ComfyUI 画布运行的示例：
+
+- `example workflow/Qwen H3 Prompt Example Workflow.json` —— 加载一张参考图，经 Qwen H3 节点生成 H3 提示词，并用 Preview 节点预览输出。
+- `example workflow/Qwen H3 Prompt Example Workflow.png` —— 示例工作流的渲染预览图。
+
+导入工作流时若节点未出现，请确认已安装本节点并刷新页面（Ctrl+F5）。参考图路径需按你本地实际文件调整。
+
 ## 安装llama-server runtime
 
 项目只提供一个跨平台安装入口 `install_runtime.py`。它仅使用 Python 标准库，自动识别 Windows、Linux 或 macOS、x64/ARM64 架构及显卡，并为当前机器部署固定的 llama.cpp `b11115` runtime，不需要安装额外的 pip 包。NVIDIA 设备优先使用 `nvidia-smi` 报告的驱动 CUDA 兼容版本，`nvcc` 版本仅作为备用判断。
