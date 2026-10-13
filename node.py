@@ -347,7 +347,10 @@ class QwenH3Prompt(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "reasoning_effort",
-                    options=["low", "medium", "xhigh", "2"],
+                    # 兼容旧工作流：部分旧工作流把该值存成整数 2，部分存成字符串 "2"，
+                    # ComfyUI 服务端校验是严格类型比较，因此整数 2 与字符串 "2" 都要收录，
+                    # 二者在 execute() 中都会被归一化为 medium。
+                    options=["low", "medium", "xhigh", "2", 2],
                     default="medium",
                     tooltip="Applied only in thinking mode. Medium is the balanced RTX 3090 preset. '2' is kept for backward compatibility with older workflows and is treated as medium.",
                 ),
