@@ -30,10 +30,42 @@ from .skills import (
     system_prompt,
 )
 
-MODEL_DIR = Path(folder_paths.models_dir) / "LLM" / "Qwen3.8"
+MODEL_DIR = Path(folder_paths.models_dir) / "LLM"
+LLM_FOLDER = "LLM"
 DEFAULT_MODEL = "Qwen3.8-27B-Q4_K_M.gguf"
 DEFAULT_MMPROJ = "mmproj-F16.gguf"
 REFERENCE_VIDEO_FPS = 24.0
+
+
+def _register_llm_folder() -> None:
+    """Register the local LLM model directory as a ComfyUI model folder.
+
+    Registers ``ComfyUI/models/LLM`` under the ``LLM`` model-folder key and
+    ensures the ``.gguf`` extension filter is attached. ComfyUI's
+    ``get_filename_list`` then recursively scans the folder (including
+    subdirectories such as ``Qwen3.8/``), returns relative paths, and
+    automatically invalidates its cache when the folder's mtime changes, so
+    newly dropped GGUF files show up without a restart.
+    """
+    try:
+        folder_paths.add_model_folder_path(LLM_FOLDER, str(MODEL_DIR))
+        paths, extensions = folder_paths.folder_names_and_paths.get(
+            LLM_FOLDER, ([], set())
+        )
+        if not paths:
+            folder_paths.folder_names_and_paths[LLM_FOLDER] = ([str(MODEL_DIR)], {".gguf"})
+        elif hasattr(extensions, "add"):
+            extensions.add(".gguf")
+        else:
+            folder_paths.folder_names_and_paths[LLM_FOLDER] = (
+                paths,
+                {*extensions, ".gguf"},
+            )
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError):
+        pass
+
+
+_register_llm_folder()
 INFERENCE_LOCK = threading.Lock()
 SERVER_MANAGER = LlamaServerManager()
 LOGGER = logging.getLogger("ComfyUI.QwenH3Prompt")
@@ -70,8 +102,32 @@ def _release_node_resources() -> None:
     comfy.model_management.soft_empty_cache(force=True)
 
 
+def _scan_gguf_models() -> list[str]:
+    """Return every GGUF file under the local LLM model directory.
+
+    Uses ComfyUI's registered ``LLM`` folder list, which recursively scans
+    ``ComfyUI/models/LLM`` (including subdirectories such as ``Qwen3.8/``),
+    filters by the ``.gguf`` extension, and refreshes its cache when new
+    files are added. Returns sorted forward-slash relative paths.
+    """
+    try:
+        names = folder_paths.get_filename_list(LLM_FOLDER)
+    except (KeyError, AttributeError):
+        _register_llm_folder()
+        try:
+            names = folder_paths.get_filename_list(LLM_FOLDER)
+        except (KeyError, AttributeError):
+            return []
+    result = []
+    for name in names:
+        normalized = str(name).replace("\\", "/")
+        if normalized.lower().endswith(".gguf"):
+            result.append(normalized)
+    return sorted(result)
+
+
 def _model_options(projector: bool) -> list[str]:
-    files = sorted(path.name for path in MODEL_DIR.glob("*.gguf")) if MODEL_DIR.is_dir() else []
+    files = _scan_gguf_models()
     if projector:
         options = [name for name in files if "mmproj" in name.lower()]
         fallback = DEFAULT_MMPROJ
@@ -83,8 +139,13 @@ def _model_options(projector: bool) -> list[str]:
 
 def _resolve_model(name: str) -> Path:
     root = MODEL_DIR.resolve()
-    path = (root / name).resolve()
-    if path.parent != root or not path.is_file() or path.suffix.lower() != ".gguf":
+    normalized = str(name).replace("\\", "/")
+    path = (root / normalized).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise FileNotFoundError(f"Invalid GGUF path outside {root}: {name}")
+    if not path.is_file() or path.suffix.lower() != ".gguf":
         raise FileNotFoundError(f"Invalid or missing GGUF model in {root}: {name}")
     return path
 
@@ -260,13 +321,23 @@ class QwenH3Prompt(io.ComfyNode):
                     "llm_model",
                     options=models,
                     default=DEFAULT_MODEL if DEFAULT_MODEL in models else models[0],
-                    tooltip="GGUF language model from ComfyUI/models/LLM/Qwen3.8.",
+                    remote=io.RemoteOptions(
+                        route=f"/models/{LLM_FOLDER}",
+                        refresh_button=True,
+                        control_after_refresh="first",
+                    ),
+                    tooltip="GGUF language model from ComfyUI/models/LLM. Click the refresh button to re-scan the local directory for newly added GGUF files.",
                 ),
                 io.Combo.Input(
                     "vision_model",
                     options=projectors,
                     default=DEFAULT_MMPROJ if DEFAULT_MMPROJ in projectors else projectors[0],
-                    tooltip="GGUF multimodal projector from ComfyUI/models/LLM/Qwen3.8.",
+                    remote=io.RemoteOptions(
+                        route=f"/models/{LLM_FOLDER}",
+                        refresh_button=True,
+                        control_after_refresh="first",
+                    ),
+                    tooltip="GGUF multimodal projector from ComfyUI/models/LLM. Click the refresh button to re-scan the local directory for newly added GGUF files.",
                 ),
                 io.Boolean.Input(
                     "think_mode",

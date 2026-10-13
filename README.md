@@ -21,7 +21,12 @@ git clone https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt.git
 ```
 
 ## 模型目录
-把 Qwen3.8 视觉模型和GGUF权重文件放到```ComfyUI/models/LLM/Qwen3.8/```目录。
+把 Qwen3.8 视觉模型和GGUF权重文件放到```ComfyUI/models/LLM/```目录或其任意子目录（如```ComfyUI/models/LLM/Qwen3.8/```）均可。节点会递归扫描```ComfyUI/models/LLM```目录，自动检测其中的GGUF文件并填充到节点的```llm_model```和```vision_model```下拉列表：
+
+* 文件名含 ```mmproj``` 的 GGUF 归入```vision_model```（视觉投影器），其余归入```llm_model```（语言模型）。
+* 两个下拉框带官方刷新按钮，点击即可立即重新扫描本地目录，把新放入的GGUF文件更新到列表中，无需重启 ComfyUI。
+* 通过后端实时扫描目录，目录内容变化（新增/删除模型）后列表会自动同步。
+
 * 视觉权重：
   从 https://huggingface.co/unsloth/Qwen3.8-27B-GGUF 下载 ```mmproj-F16.gguf```
 * GGUF权重：   
