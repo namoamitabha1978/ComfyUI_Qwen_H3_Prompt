@@ -82,8 +82,36 @@ def _run_install(backend: str) -> None:
         )
 
 
+def _file_info(path: Path) -> dict | None:
+    """单个文件的路径 + 大小（MB）；非文件/不可读返回 None。"""
+    try:
+        if not path.is_file():
+            return None
+        size_mb = round(path.stat().st_size / 1048576, 2)
+    except OSError:
+        return None
+    return {"path": str(path), "size_mb": size_mb}
+
+
+def _dir_listing(root: Path) -> list[dict]:
+    """递归列出目录下所有文件（相对路径 + 大小）。"""
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    try:
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                try:
+                    out.append({"path": str(p.relative_to(root)), "size_mb": round(p.stat().st_size / 1048576, 2)})
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return out
+
+
 def _build_status() -> dict:
-    """汇总当前 LLM 运行时检测信息（路径/后端/版本等）。"""
+    """汇总当前 LLM 运行时检测信息（路径/文件/后端/版本/状态）。"""
     from .runtime import load_runtime_spec  # noqa: PLC0415
     from .runtime_detect import detect_python_runtime, runtime_status  # noqa: PLC0415
     from . import node as _node  # noqa: PLC0415
@@ -93,11 +121,16 @@ def _build_status() -> dict:
     standalone_detail: dict | None = None
     try:
         spec = load_runtime_spec()
+        lib_files: list[dict] = []
+        for lib_dir in spec.library_dirs:
+            lib_files.extend(_dir_listing(Path(lib_dir)))
         standalone_detail = {
             "backend": spec.backend,
             "executable": str(spec.executable),
+            "executable_file": _file_info(spec.executable),
             "platform": spec.platform_name,
             "library_dirs": [str(p) for p in spec.library_dirs],
+            "library_files": lib_files,
             "n_gpu_layers": spec.n_gpu_layers,
             "fit": spec.fit,
             "fit_target_mib": spec.fit_target_mib,
@@ -112,15 +145,25 @@ def _build_status() -> dict:
         "version": py.version,
         "gpu_offload": py.gpu_offload,
         "native_lib": py.native_lib,
+        "native_lib_file": _file_info(Path(py.native_lib)) if py.native_lib else None,
         "source": py.source,
         "platform": py.platform_name,
     }
 
     model_dir = _node.MODEL_DIR
-    gguf_files = (
-        sorted(str(p) for p in model_dir.rglob("*.gguf"))
-        if model_dir.is_dir() else []
-    )
+    gguf_files = sorted(model_dir.rglob("*.gguf")) if model_dir.is_dir() else []
+    models = [
+        {"path": str(p), "name": p.name, "size_mb": round(p.stat().st_size / 1048576, 2)}
+        for p in gguf_files
+    ]
+
+    runtime_root = NODE_ROOT / "runtime"
+    config_payload: dict | None = None
+    try:
+        config_payload = json.loads(RUNTIME_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        config_payload = None
+
     return {
         **summary,
         "standalone": standalone_detail,
@@ -129,10 +172,12 @@ def _build_status() -> dict:
             "node_root": str(NODE_ROOT),
             "runtime_config": str(RUNTIME_CONFIG) if RUNTIME_CONFIG.exists() else None,
             "install_script": str(INSTALL_SCRIPT) if INSTALL_SCRIPT.exists() else None,
-            "runtime_dir": str(NODE_ROOT / "runtime") if (NODE_ROOT / "runtime").exists() else None,
+            "runtime_dir": str(runtime_root) if runtime_root.exists() else None,
             "model_dir": str(model_dir) if model_dir.is_dir() else None,
         },
-        "models": {"count": len(gguf_files), "gguf": gguf_files},
+        "runtime_config": config_payload,
+        "runtime_files": _dir_listing(runtime_root),
+        "models": {"count": len(models), "gguf": models},
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
