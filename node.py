@@ -824,4 +824,7 @@ class QwenH3PromptExtension(ComfyExtension):
 
 
 async def comfy_entrypoint() -> QwenH3PromptExtension:
+    from .runtime_api import register_runtime_api_routes
+
+    register_runtime_api_routes()
     return QwenH3PromptExtension()

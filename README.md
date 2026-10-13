@@ -147,6 +147,16 @@ python install_runtime.py --backend cuda --build-from-source
 
 后端参数会覆盖 `runtime_config.json` 里的默认值；切换后端/参数时节点自动重建对应的 llama-server 实例。
 
+### 节点底部快捷按钮
+
+节点 UI 底部提供三个一键按钮（需刷新浏览器页面后出现）：
+
+- **🔍 检测当前 runtime**：调用 `GET /qwen_h3/runtime/status`，弹出对话框显示当前已安装/可用的 llama.cpp 运行时信息——独立 runtime 后端（vulkan/cuda）、可执行文件与库的**有效路径**、`--fit`/`n_gpu_layers`/flash 参数、llama-cpp-python 版本与 GPU 卸载状态、`models/LLM` 下已扫描到的 gguf 清单。
+- **🖥️ 安装 NV (CUDA) runtime**：调用 `POST /qwen_h3/runtime/install {backend:cuda}`，后台执行 `install_runtime.py --backend cuda`（联网下载 CUDA 独立运行时），按钮下方实时显示进度，完成/失败后弹窗给出结果与日志尾部。
+- **🖥️ 安装 Vulkan runtime**：同上，后台执行 `install_runtime.py --backend vulkan`。
+
+安装全程在后台线程执行，不阻塞 ComfyUI；安装状态可通过 `GET /qwen_h3/runtime/install/status` 查询。重复点击同类型安装时若已有任务在跑会返回冲突提示。
+
 
 
 ## 节点
