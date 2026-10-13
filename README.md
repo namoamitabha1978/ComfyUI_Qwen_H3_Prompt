@@ -44,9 +44,9 @@ Qwen3.8-9B 是把 Qwen3.8-2.4T 的能力蒸馏到 Qwen3.5-9B 架构的模型，�
 
 * 语言模型（约 5.4 GB）：从 https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF 下载 ```Qwen3.8-9B-Q4_K_M.gguf```
   - 直接链接：https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF/resolve/main/Qwen3.8-9B-Q4_K_M.gguf
-* 视觉投影器 mmproj（约 879 MB）：下载 ```mmproj-BF16.gguf```，建议重命名为 ```mmproj-qwen3.5-9b-BF16.gguf```（与示例工作流一致）
-  - ModelScope（国内下载快）：https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/file/view/master/mmproj-BF16.gguf
-  - Hugging Face：https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf
+* 视觉投影器 mmproj（约 879 MB）：下载 ```mmproj-F16.gguf```，建议重命名为 ```mmproj-qwen3.5-9b-F16.gguf```（与示例工作流一致）
+  - ModelScope（国内下载快）：https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/file/view/master/mmproj-F16.gguf
+  - Hugging Face：https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf
 
 ## 示例工作流（Example Workflow）
 
