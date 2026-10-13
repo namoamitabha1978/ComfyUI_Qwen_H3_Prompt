@@ -1,6 +1,6 @@
 # ComfyUI Qwen H3 Prompt
 插件灵感源于：
-https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt 
+https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt 和
 https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8
 ，并在基础上做了较大的改动。
 
