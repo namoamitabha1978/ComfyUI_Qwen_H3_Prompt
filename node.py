@@ -347,9 +347,9 @@ class QwenH3Prompt(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "reasoning_effort",
-                    options=["low", "medium", "xhigh"],
+                    options=["low", "medium", "xhigh", "2"],
                     default="medium",
-                    tooltip="Applied only in thinking mode. Medium is the balanced RTX 3090 preset.",
+                    tooltip="Applied only in thinking mode. Medium is the balanced RTX 3090 preset. '2' is kept for backward compatibility with older workflows and is treated as medium.",
                 ),
                 io.Int.Input(
                     "seed",
@@ -435,6 +435,15 @@ class QwenH3Prompt(io.ComfyNode):
         reference_videos=None,
     ) -> io.NodeOutput:
         total_started = time.perf_counter()
+        # Sanitize legacy/stale reasoning_effort values (e.g. "2" from older
+        # workflows) down to a valid llama.cpp effort level.
+        _VALID_EFFORTS = ("low", "medium", "xhigh")
+        if reasoning_effort not in _VALID_EFFORTS:
+            LOGGER.info(
+                "[Qwen H3] Normalizing legacy reasoning_effort=%r to 'medium'",
+                reasoning_effort,
+            )
+            reasoning_effort = "medium"
         content = None
         messages = None
         repair_messages = None
