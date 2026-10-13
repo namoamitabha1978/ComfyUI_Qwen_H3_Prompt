@@ -1,6 +1,6 @@
 # ComfyUI Qwen H3 Prompt
 
-在 ComfyUI 内使用本地 Qwen3.8-27B 驱动 Minimax H3 官方 Skill 或自定义 Skill 生成 H3 提示词与制作方案。
+在 ComfyUI 内使用本地 Qwen3.8-27B 驱动 Minimax H3 官方 Skill 或自定义 Skill 生成 H3 提示词与制作方案。南无阿弥陀佛。
 节点在 ComfyUI 内启动独立的本地 `llama-server`，推理过程不访问网络。运行完成后结束外部进程，释放GPU显存和系统内存（`force unload model`开启时），不占用ComfyUI内部资源。
 
 节点加载时扫描 `skills/` 和 `custom_skills/` 目录并加载 Skill。
@@ -265,3 +265,4 @@ Qwen 会根据用户提示词、目标时长、参考图片以及参考视频的
 - 跨平台runtime安装器固定使用 llama.cpp `b11115`，对应完整 commit `d5f66492e661b63e6c74822c2b72f5146053994e`，并对下载文件执行 SHA256 校验。
 - Linux CUDA 源码构建使用同一固定 tag 和 commit。llama.cpp 的 MIT 许可证保存在 `third_party/llama.cpp-LICENSE`。
 - 本项目仅为学习研究使用，如果作为商业用途，请查阅相关原项目授权协议。
+- 南无阿弥陀佛
