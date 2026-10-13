@@ -121,16 +121,16 @@ python install_runtime.py --backend cuda --build-from-source
 
 ### 运行时自动检测与回退（runtime detection）
 
-节点不再强制依赖独立的 `llama-server`。启动时会自动检测当前 ComfyUI Python 环境里可用的 llama.cpp 运行时，并按下述优先级选择；启动失败会自动降级到下一个可用运行时，全程在日志中记录选择结果：
+节点不再强制依赖独立的 `llama-server`。启动时会自动检测当前机器可用的 llama.cpp 运行时，并按下述优先级选择；启动失败会自动降级到下一个可用运行时，全程在日志中记录选择结果：
 
-1. **llama-cpp-python（CUDA，进程内推理）**——推荐。如果 `llama_cpp` 已安装到 ComfyUI 的 Python 环境（含 `ggml-cuda.dll`），节点直接用它加载 GGUF 与 mmproj，无需下载独立运行时。这也是借用 `comfyui-minimax-h3-prompt-enhancer-T8` 的本地 Qwen 方案。
-2. **独立 llama-server（standalone）**——由 `install_runtime.py` 安装的官方 llama.cpp `b11115` 运行时，带 `--fit` 动态显存管理。
+1. **独立 llama-server（standalone，`--fit` 动态显存管理）**——默认首选。由 `install_runtime.py` 安装的官方 llama.cpp `b11115` 运行时，在低显存（如 8 GB）下通过把部分层溢出到系统内存来支撑大 context。H3 带图工作流需要 8K+ 上下文，而全量上 GPU 的后端受显存限制无法提供，故 standalone 是稳定首选。
+2. **llama-cpp-python（CUDA，进程内推理）**——兜底。如果 `llama_cpp` 已安装到 ComfyUI 的 Python 环境（含 `ggml-cuda.dll`），节点直接用它加载 GGUF 与 mmproj（借用 `comfyui-minimax-h3-prompt-enhancer-T8` 的方案）。CUDA 快，但全量上 GPU 时 context 受显存限制；作为兜底会优先保证足够 context（必要时回退 CPU，慢但可用），而不是压到会触发 context-shift 报错的小值。
 3. 两者都不可用时才报错，并给出安装指引。
 
 几点说明：
 
 - 检测结果可通过 `runtime_status()` 查看（`backend/version/gpu_offload/platform` 等），节点每次运行时也会在 `comfyui.log` 打印 `[Qwen H3] Runtime detection ...` 与 `[Qwen H3] Selected llama runtime: ...`。
-- 走 llama-cpp-python 后端时，节点会读取 GGUF 头部元数据估算 KV 缓存规模，按可用显存**自动封顶有效 context**，避免 context 过大导致模型整体回退到 CPU（慢）或爆显存。日志中 `caps context N -> M` 即表示封顶后的值。
+- 走 llama-cpp-python 后端时，节点会读取 GGUF 头部元数据估算 KV 缓存规模，并保证有效 context 至少 16384（显存不足时允许回退 CPU 也要保住 context，避免 M-RoPE 禁 context-shift 导致的硬错误）。
 - 同一后端按调用切换 `think_mode` 时，llama-cpp-python 会重建一次模型实例以保证思考/非思考输出正确（日志可见对应加载耗时）。
 - 已检测到独立运行时但无需安装时，`runtime/.downloads` 下的已下载缓存可安全删除以释放磁盘空间。
 

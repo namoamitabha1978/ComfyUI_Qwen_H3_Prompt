@@ -356,10 +356,10 @@ class LlamaServer:
 class LlamaServerManager:
     """Owns the one llama.cpp inference backend used by this custom node.
 
-    运行时选择：优先 llama-cpp-python（CUDA 加速、用户指定的借用方案），
-    其次独立 llama-server（standalone，官方 --fit 路径）。启动失败时自动
-    降级到下一个可用运行时。选择结果在 acquire 时记录，可用
-    ``runtime_status()`` 查看。
+    运行时选择：优先独立 llama-server（standalone，官方 --fit 路径，能支撑大
+    context——低显存下把部分层溢出到系统内存），其次 llama-cpp-python（CUDA 加速，
+    但全量上 GPU 时 context 受显存限制，作为兜底）。启动失败时自动降级到下一个
+    可用运行时。选择结果在 acquire 时记录，可用 ``runtime_status()`` 查看。
     """
 
     def __init__(self):
@@ -400,10 +400,14 @@ class LlamaServerManager:
             )
 
         attempts: list[tuple[str, RuntimeSpec | PythonRuntimeSpec]] = []
-        if python_spec is not None:
-            attempts.append(("llama-cpp-python", python_spec))
+        # 优先独立 llama-server（standalone，官方 --fit 路径）：在低显存（如 8GB）下
+        # 能通过把部分层溢出到系统内存来支撑大 context（H3 带图工作流需 8K+ 上下文）。
+        # llama-cpp-python 全量上 GPU 时 context 被显存限制在 3~4K，超过则整体掉 CPU
+        # （9B CPU 极慢），故仅作兜底。启动失败自动尝试下一个。
         if standalone_spec is not None:
             attempts.append(("standalone", standalone_spec))
+        if python_spec is not None:
+            attempts.append(("llama-cpp-python", python_spec))
 
         with self._lock:
             if (

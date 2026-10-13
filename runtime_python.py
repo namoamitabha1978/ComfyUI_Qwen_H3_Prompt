@@ -269,8 +269,10 @@ class PythonLlamaServer:
                         f"pair. {type(error).__name__}: {error}"
                     ) from error
 
-            # 显存自适应：模型默认全部上 GPU（快），仅按可用显存封顶 KV/context，
-            # 避免 context 过大导致 llama.cpp 整体回退到 CPU（慢）。
+            # 本后端现作为兜底（主路径为 standalone --fit）。因此优先保证 context
+            # 足够 H3 工作流（含图片时需 8K+），避免 M-RoPE 禁 context-shift 导致硬错误。
+            # 显存足够时全量上 GPU（快）；显存不足时允许 llama.cpp 回退到 CPU（慢但
+            # 可用），而不是把 context 压到会报错的小值。
             requested_ctx = int(self.context_size)
             effective_ctx = requested_ctx
             vram = _available_vram_mb()
@@ -282,16 +284,18 @@ class PythonLlamaServer:
                 if self.mmproj is not None and Path(self.mmproj).is_file():
                     base_mb += Path(self.mmproj).stat().st_size / 1048576
                 kv_bytes = _kv_bytes_per_token(self.model)
-                reserve_mb = 512.0
+                reserve_mb = 300.0
                 kv_budget_mb = free_mb - base_mb - reserve_mb
-                max_ctx = int(kv_budget_mb * 1048576 / kv_bytes) if kv_bytes > 0 else requested_ctx
-                effective_ctx = max(1024, min(requested_ctx, max_ctx))
+                gpu_max_ctx = int(kv_budget_mb * 1048576 / kv_bytes) if kv_bytes > 0 else requested_ctx
+                # 只要显存能支撑 H3 所需的 16384 context 就留在 GPU；否则回退 CPU 也保住 context
+                effective_ctx = min(requested_ctx, max(16384, gpu_max_ctx))
             if effective_ctx != requested_ctx:
                 LOGGER.warning(
-                    "[Qwen H3] python backend caps context %d -> %d to keep the model on GPU "
-                    "(free VRAM ~%.0f MB)",
-                    requested_ctx,
+                    "[Qwen H3] python backend uses context %d (requested %d, GPU-fit ~%d; "
+                    "may fall back to CPU to preserve context) | free VRAM ~%.0f MB",
                     effective_ctx,
+                    requested_ctx,
+                    (gpu_max_ctx if vram is not None else requested_ctx),
                     (vram[1] if vram is not None else 0),
                 )
             self._effective_ctx = effective_ctx
