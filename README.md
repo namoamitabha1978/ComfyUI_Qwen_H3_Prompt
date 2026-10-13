@@ -1,4 +1,5 @@
 # ComfyUI Qwen H3 Prompt
+插件灵感源于：https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt.git ，并在基础上做了较大的改动。
 
 在 ComfyUI 内使用本地 Qwen3.8-27B 驱动 Minimax H3 官方 Skill 或自定义 Skill 生成 H3 提示词与制作方案。南无阿弥陀佛。
 节点在 ComfyUI 内启动独立的本地 `llama-server`，推理过程不访问网络。运行完成后结束外部进程，释放GPU显存和系统内存（`force unload model`开启时），不占用ComfyUI内部资源。
@@ -17,7 +18,7 @@
 使用ComfyUI Manager安装， 或使用以下命令手动安装:
 ```commandline
 cd ComfyUI/custom_nodes/
-git clone https://github.com/chflame163/ComfyUI_Qwen_H3_Prompt.git
+git clone https://github.com/namoamitabha1978/ComfyUI_Qwen_H3_Prompt.git
 ```
 
 ## 模型目录
