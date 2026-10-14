@@ -220,8 +220,12 @@ function addButtons(node) {
   node._qwenH3Buttons = true;
 
   const nonSerializing = (w) => {
-    w.serializeValue = () => undefined;
-    w.serialize = () => undefined;
+    // 正确禁用序列化：serialize 必须是布尔 false，而不是返回 undefined 的函数（函数是真值，仍会被写入工作流 JSON）。
+    try {
+      w.serialize = false;
+      w.options = w.options || {};
+      w.options.serialize = false;
+    } catch (e) {}
     return w;
   };
 
