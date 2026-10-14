@@ -52,10 +52,10 @@ Qwen3.8-9B 是把 Qwen3.8-2.4T 的能力蒸馏到 Qwen3.5-9B 架构的模型，�
 
 `example workflow/` 目录提供可直接拖入 ComfyUI 画布运行的示例：
 
-- `example workflow/Qwen H3 Prompt Example Workflow.json` —— 加载一张参考图，经 Qwen H3 节点生成 H3 提示词，并用 Preview 节点预览输出。
+- `example workflow/Qwen H3 Prompt Example Workflow.json` —— 纯文本即可运行：Qwen H3 节点（`vision_model` 默认 `mmproj-qwen3.5-9b-F16.gguf`，`llm_model` 默认 `Qwen3.8-9B-Q4_K_M.gguf`）生成 H3 提示词，Preview 节点预览输出。如需带参考图，把 LoadImage 的输出连到节点的 `reference_image_0/1` 即可。
 - `example workflow/Qwen H3 Prompt Example Workflow.png` —— 示例工作流的渲染预览图。
 
-导入工作流时若节点未出现，请确认已安装本节点并刷新页面（Ctrl+F5）。参考图路径需按你本地实际文件调整。
+导入工作流时若节点未出现，请确认已安装本节点并刷新页面（Ctrl+F5）。`vision_model` 需与本地实际文件名一致（本示例默认 `mmproj-qwen3.5-9b-F16.gguf`）；如用的是其他命名的 mmproj，请在下拉中重新选择。
 
 ## 安装llama-server runtime
 
