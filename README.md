@@ -180,6 +180,18 @@ python install_runtime.py --backend cuda --build-from-source
 
 安装全程在后台线程执行，不阻塞 ComfyUI；安装状态可通过 `GET /qwen_h3/runtime/install/status` 查询。重复点击同类型安装时若已有任务在跑会返回冲突提示。
 
+### Skill 列表刷新按钮
+
+`skill` 下拉框自带一个刷新按钮（下拉框最右），点击即调用 `GET /qwen_h3/skills` 实时重扫 `skills/` 与 `custom_skills/` 目录，把新增的 Skill 立即更新到列表，无需重启 ComfyUI，也无需重新加载工作流。
+
+### 推理进度条
+
+推理执行期间，节点的 `runtime_status` 控件会实时显示文字进度条（`████...` + 百分比 + 已生成/总 token 数），覆盖模式路由、技能路由、主推理、自动修复各阶段：
+
+* 进度通过 ComfyUI 原生 websocket 推送 `qwen_h3_progress` 事件，由前端监听渲染，不占用推理线程、不阻塞执行。
+* 推理结束后 2.5 秒自动复位为「就绪」；结果仍以 `h3_prompt` 输出为准。
+* 流式输出与旧的非流式输出完全一致（已在 cuda12 后端实测：42 字符输出逐字匹配、21 个进度事件递增），进度条仅为展示，不影响最终结果。
+
 
 
 ## 节点
@@ -187,7 +199,7 @@ python install_runtime.py --backend cuda --build-from-source
 ![image](images/QwenH3Prompt_node.jpg)  
 
 节点选项说明：
-- `skill`：`auto`、内置 Skill 或 `custom_skills/` 中配置的第三方 Skill。设为auto时会在全部 Skill 中自动选择。
+- `skill`：`auto`、内置 Skill 或 `custom_skills/` 中配置的第三方 Skill。设为auto时会在全部 Skill 中自动选择。下拉框最右带刷新按钮，点击实时重扫 Skill 目录。
 - `duration`：目标 H3 视频时长，默认 `10.0` 秒，取值范围4~15秒。
 - `think_mode`：布尔开关，默认关闭；自动在 Qwen 官方 instruct 和 thinking 推荐参数之间切换。
 - `reasoning_effort`：仅在 `think_mode` 开启时生效，默认 `medium`。

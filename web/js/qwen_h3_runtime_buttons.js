@@ -3,6 +3,71 @@ import { api } from "../../scripts/api.js";
 
 console.log("[QwenH3] runtime buttons extension loaded");
 
+// ---- 推理进度条：监听后端 websocket 推送，渲染到所有 QwenH3 节点的 runtime_status 控件 ----
+function collectQwenNodes() {
+  try {
+    const nodes = app.graph?._nodes || [];
+    return nodes.filter(
+      (n) => n.type === "QwenH3PromptLocal" || n.constructor?.type === "QwenH3PromptLocal"
+    );
+  } catch (e) {
+    return [];
+  }
+}
+
+function progressBar(percent, width) {
+  const filled = Math.round(Math.max(0, Math.min(1, percent)) * width);
+  return "█".repeat(filled) + "░".repeat(Math.max(0, width - filled));
+}
+
+const PROGRESS_STAGE_LABEL = {
+  routing: "路由",
+  inference: "推理",
+  repair: "修复",
+  done: "完成",
+};
+
+function setStatusWidgetValue(node, text) {
+  try {
+    const w = node.widgets?.find((w) => w.name === "runtime_status");
+    if (w) {
+      w.value = text;
+      w.callback?.();
+      node.setDirtyCanvas?.(true, true);
+    }
+  } catch (e) {}
+}
+
+function updateProgress(d) {
+  if (!d || typeof d !== "object") return;
+  const stage = d.stage || "inference";
+  const pct = Math.round((d.percent || 0) * 100);
+  const label = d.label || PROGRESS_STAGE_LABEL[stage] || stage;
+  let text;
+  if (stage === "done") {
+    text = "✓ 推理完成";
+  } else {
+    text = `${label} ${pct}% ${progressBar(d.percent || 0, 16)} (${d.current ?? 0}/${d.total ?? 0} tok)`;
+  }
+  const nodes = collectQwenNodes();
+  nodes.forEach((n) => setStatusWidgetValue(n, text));
+  if (stage === "done") {
+    setTimeout(() => {
+      nodes.forEach((n) => setStatusWidgetValue(n, "就绪"));
+    }, 2500);
+  }
+}
+
+api.addEventListener("qwen_h3_progress", (event) => {
+  try {
+    const d = event?.detail?.data ?? event?.detail;
+    updateProgress(d);
+  } catch (e) {
+    console.error("[QwenH3] progress handler error:", e);
+  }
+});
+
+
 // 自建模态弹窗：不依赖 window.comfyAPI.dialog / alert（在 iframe 中 alert 常被拦截），
 // 任何 ComfyUI 版本都能可靠弹出。
 function showModal(title, html) {

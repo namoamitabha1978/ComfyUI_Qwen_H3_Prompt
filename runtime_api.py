@@ -223,10 +223,18 @@ def _register() -> None:
             state = dict(_INSTALL_STATE)
         return web.json_response(state, headers={"Cache-Control": "no-store"})
 
+    async def skills_route(_request: Any) -> Any:
+        """实时重扫 skills/ 与 custom_skills/，返回 skill 下拉可选项（含 auto）。"""
+        from .skills import discover_skill_registry  # noqa: PLC0415
+
+        names = ["auto", *[spec.id for spec in discover_skill_registry()]]
+        return web.json_response(names, headers={"Cache-Control": "no-store"})
+
     for method, path, handler in (
         ("get", "/qwen_h3/runtime/status", status_route),
         ("post", "/qwen_h3/runtime/install", install_route),
         ("get", "/qwen_h3/runtime/install/status", install_status_route),
+        ("get", "/qwen_h3/skills", skills_route),
     ):
         try:
             getattr(prompt_server.routes, method)(path)(handler)

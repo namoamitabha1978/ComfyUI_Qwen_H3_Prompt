@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Iterator
 
 from .runtime_detect import (
     PythonRuntimeSpec,
@@ -330,6 +331,41 @@ class LlamaServer:
             detail = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"llama.cpp HTTP {error.code}: {detail}") from error
 
+    def _request_stream(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        timeout: float = 900.0,
+    ) -> Iterator[dict[str, Any]]:
+        """POST 一个带 ``stream: True`` 的请求，逐行解析 SSE ``data:`` 事件并产出 JSON 块。"""
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.base_url + path,
+            data=data,
+            method=method,
+            headers={
+                "Authorization": "Bearer comfyui-local",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    text = line[len("data:"):].strip()
+                    if not text or text == "[DONE]":
+                        continue
+                    try:
+                        yield json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"llama.cpp HTTP {error.code}: {detail}") from error
+
     def chat(
         self,
         messages: list[dict[str, object]],
@@ -344,6 +380,7 @@ class LlamaServer:
         repetition_penalty: float,
         think_mode: bool,
         reasoning_effort: str,
+        progress_cb: Callable[[int, int], None] | None = None,
     ) -> tuple[str, dict[str, int]]:
         payload = {
             "model": "qwen3.8-27b",
@@ -363,13 +400,37 @@ class LlamaServer:
         }
         if think_mode:
             payload["reasoning_effort"] = reasoning_effort
-        response = self._request("POST", "/v1/chat/completions", payload)
-        content = response["choices"][0]["message"].get("content") or ""
+
+        if progress_cb is None:
+            response = self._request("POST", "/v1/chat/completions", payload)
+            content = response["choices"][0]["message"].get("content") or ""
+            usage = response.get("usage", {})
+        else:
+            payload["stream"] = True
+            content = ""
+            generated = 0
+            usage: dict[str, int] = {}
+            for chunk in self._request_stream("POST", "/v1/chat/completions", payload):
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                message = (choices[0] or {}).get("message")
+                if message and message.get("content"):
+                    # 终帧携带完整 message.content，作为权威结果
+                    content = message["content"]
+                else:
+                    delta = (choices[0] or {}).get("delta") or {}
+                    text = delta.get("content") or ""
+                    if text:
+                        content += text
+                        generated += 1
+                        progress_cb(generated, max_tokens)
+
         if not content.strip():
             raise RuntimeError(
                 "Qwen returned no final answer. Disable think mode or increase max_tokens so thinking does not consume the output budget."
             )
-        return content.strip(), response.get("usage", {})
+        return content.strip(), dict(usage)
 
 
 class LlamaServerManager:

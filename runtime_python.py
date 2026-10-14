@@ -351,6 +351,7 @@ class PythonLlamaServer:
         repetition_penalty: float,
         think_mode: bool,
         reasoning_effort: str,
+        progress_cb: Any | None = None,
     ) -> tuple[str, dict[str, Any]]:
         del reasoning_effort  # llama-cpp-python 由 enable_thinking 控制思考强度
         with self._lock:
@@ -370,22 +371,50 @@ class PythonLlamaServer:
                 "min_p": float(min_p),
                 "presence_penalty": float(presence_penalty),
                 "repeat_penalty": float(repetition_penalty),
-                "stream": False,
+                "stream": progress_cb is not None,
             }
             for name in ("presence_penalty", "repeat_penalty", "min_p"):
                 if not _supports_keyword_argument(self.llm.create_chat_completion, name):
                     options.pop(name, None)
+            if progress_cb is not None and _supports_keyword_argument(
+                self.llm.create_chat_completion, "stream_options"
+            ):
+                options["stream_options"] = {"include_usage": True}
+
             try:
-                result = self.llm.create_chat_completion(**options)
+                if progress_cb is None:
+                    result = self.llm.create_chat_completion(**options)
+                    try:
+                        content = result["choices"][0]["message"].get("content") or ""
+                    except (KeyError, IndexError, TypeError, AttributeError) as error:
+                        raise PythonRuntimeError(
+                            "llama-cpp-python response is missing choices[0].message.content."
+                        ) from error
+                    usage = result.get("usage") or {}
+                else:
+                    content_parts: list[str] = []
+                    generated = 0
+                    usage: dict[str, Any] = {}
+                    stream = self.llm.create_chat_completion(**options)
+                    for chunk in stream:
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+                        choices = chunk.get("choices") or []
+                        message = (choices[0] or {}).get("message")
+                        if message and message.get("content"):
+                            # 终帧携带完整 message.content，作为权威结果
+                            content_parts = [message["content"]]
+                        else:
+                            delta = (choices[0] or {}).get("delta") or {}
+                            text = delta.get("content") or ""
+                            if text:
+                                content_parts.append(text)
+                                generated += 1
+                                progress_cb(generated, int(max_tokens))
+                    content = "".join(content_parts)
             except (TypeError, ValueError, RuntimeError, OSError) as error:
                 raise PythonRuntimeError(
                     f"llama-cpp-python inference failed. {type(error).__name__}: {error}"
-                ) from error
-            try:
-                content = result["choices"][0]["message"].get("content") or ""
-            except (KeyError, IndexError, TypeError, AttributeError) as error:
-                raise PythonRuntimeError(
-                    "llama-cpp-python response is missing choices[0].message.content."
                 ) from error
             if isinstance(content, list):
                 content = "".join(
@@ -399,4 +428,4 @@ class PythonLlamaServer:
                     "The local GGUF returned no final answer. Disable thinking or "
                     "increase max output tokens."
                 )
-            return content, dict(result.get("usage") or {})
+            return content, dict(usage)

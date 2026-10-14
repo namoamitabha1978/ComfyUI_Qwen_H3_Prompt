@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 import comfy.model_management
 import folder_paths
@@ -18,6 +19,7 @@ from .media import (
     sample_indices_per_second,
     text_content,
 )
+from .progress import publish as _publish_progress
 from .runtime import LlamaServerManager
 from .skills import (
     SKILL_NAMES,
@@ -82,6 +84,15 @@ def _success(message: str) -> None:
 
 def _failure(message: str) -> None:
     LOGGER.error("%s%s%s", RED, message, RESET)
+
+
+def _progress_builder(stage: str, label: str = "") -> Callable[[int, int], None]:
+    """构造一个进度回调，把 token 级进度推送到前端节点进度条。"""
+
+    def _callback(current: int, total: int) -> None:
+        _publish_progress(stage, current, total, label)
+
+    return _callback
 
 
 def _usage_summary(usage: dict[str, int]) -> str:
@@ -307,7 +318,12 @@ class QwenH3Prompt(io.ComfyNode):
                     "skill",
                     options=["auto", *SKILL_NAMES],
                     default="auto",
-                    tooltip="Auto routes across bundled and custom Skills, or choose one directly.",
+                    remote=io.RemoteOptions(
+                        route="/qwen_h3/skills",
+                        refresh_button=True,
+                        control_after_refresh="first",
+                    ),
+                    tooltip="Auto routes across bundled and custom Skills, or choose one directly. Click the refresh button to re-scan the skills/ and custom_skills/ directories for newly added Skills without restarting ComfyUI.",
                 ),
                 io.Float.Input(
                     "duration",
@@ -641,6 +657,7 @@ class QwenH3Prompt(io.ComfyNode):
                         repetition_penalty=1.0,
                         think_mode=False,
                         reasoning_effort="low",
+                        progress_cb=_progress_builder("routing", "模式路由"),
                     )
                     mode = parse_mode_selection(mode_selection, len(images))
                     LOGGER.info(
@@ -686,6 +703,7 @@ class QwenH3Prompt(io.ComfyNode):
                         repetition_penalty=1.0,
                         think_mode=False,
                         reasoning_effort="low",
+                        progress_cb=_progress_builder("routing", "技能路由"),
                     )
                     selected = parse_skill_selection(selection)
                     LOGGER.info(
@@ -714,14 +732,17 @@ class QwenH3Prompt(io.ComfyNode):
                     selected,
                     max_tokens,
                 )
+                _publish_progress("inference", 0, max_tokens, f"推理 {selected}")
                 result, inference_usage = server.chat(
                     messages,
                     seed=seed,
                     max_tokens=max_tokens,
                     think_mode=think_mode,
                     reasoning_effort=reasoning_effort,
+                    progress_cb=_progress_builder("inference", f"推理 {selected}"),
                     **settings,
                 )
+                _publish_progress("inference", max_tokens, max_tokens, f"推理 {selected}")
                 LOGGER.info(
                     "[Qwen H3] Inference complete | %s | elapsed %.2f s",
                     _usage_summary(inference_usage),
@@ -759,6 +780,7 @@ class QwenH3Prompt(io.ComfyNode):
                         max_tokens=max_tokens,
                         think_mode=think_mode,
                         reasoning_effort=reasoning_effort,
+                        progress_cb=_progress_builder("repair", "自动修复"),
                         **settings,
                     )
                     LOGGER.info(
@@ -798,6 +820,7 @@ class QwenH3Prompt(io.ComfyNode):
                 f"[Qwen H3] Execution completed successfully | skill={selected} | mode={mode} | "
                 f"total elapsed {time.perf_counter() - total_started:.2f} s"
             )
+            _publish_progress("done", 1, 1, "完成")
             return io.NodeOutput(result, selected, mode)
         except Exception as error:
             content = None
