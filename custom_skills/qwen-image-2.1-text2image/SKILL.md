@@ -187,8 +187,4 @@ only exception is text shown inside the image, which stays in its own script.
 
 
 
-## Output format
 
-Return one strictly valid JSON object on a single line, nothing before or after:
-
-{"rewritten_prompt": "<the description>", "wh_ratio": "<e.g. 3:2>"}
