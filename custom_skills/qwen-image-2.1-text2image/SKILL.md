@@ -185,6 +185,8 @@ coherent around it.
 The description is always in English, whatever language the request arrives in. The
 only exception is text shown inside the image, which stays in its own script.
 
+
+
 ## Output format
 
 Return one strictly valid JSON object on a single line, nothing before or after:
