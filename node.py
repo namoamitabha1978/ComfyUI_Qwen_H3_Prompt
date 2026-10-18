@@ -24,6 +24,7 @@ from .runtime import LlamaServerManager
 from .skills import (
     SKILL_NAMES,
     detect_h3_mode,
+    discover_skill_registry,
     mode_router_prompt,
     output_issues,
     parse_mode_selection,
@@ -135,6 +136,25 @@ def _scan_gguf_models() -> list[str]:
         if normalized.lower().endswith(".gguf"):
             result.append(normalized)
     return sorted(result)
+
+
+def _skill_options() -> list[str]:
+    """Re-scan skills/ and custom_skills/ at schema-build time.
+
+    ComfyUI calls ``INPUT_TYPES()`` (which rebuilds ``define_schema``) on every
+    prompt submission, so returning the freshly-discovered skill ids here makes the
+    Combo's validation options update automatically — no ComfyUI restart needed when
+    skills are added, removed, or reorganized. Falls back to the import-time snapshot
+    if a scan raises, so validation never breaks.
+    """
+    try:
+        registry = discover_skill_registry()
+        names = [spec.id for spec in registry]
+        if names:
+            return ["auto", *names]
+        return ["auto"]
+    except Exception:
+        return ["auto", *SKILL_NAMES]
 
 
 def _model_options(projector: bool) -> list[str]:
@@ -316,7 +336,7 @@ class QwenH3Prompt(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "skill",
-                    options=["auto", *SKILL_NAMES],
+                    options=_skill_options(),
                     default="auto",
                     remote=io.RemoteOptions(
                         route="/qwen_h3/skills",
