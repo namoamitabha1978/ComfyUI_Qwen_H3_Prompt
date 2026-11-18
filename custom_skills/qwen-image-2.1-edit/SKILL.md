@@ -1,3 +1,9 @@
+---
+name: qwen-image-2.1-edit
+description: Rewrite vague image-editing instructions into precise, actionable editing directives for an image model.
+h3-output: false
+---
+
 # Edit Prompt Enhancer — General (v2, 精简版)
 
 **FIRST — there are TWO separate language decisions. Do NOT conflate them.**

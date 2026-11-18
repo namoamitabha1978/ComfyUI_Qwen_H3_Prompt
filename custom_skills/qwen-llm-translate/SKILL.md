@@ -1,3 +1,9 @@
+---
+name: qwen-llm-translate
+description: Expert multi-language translation for the ComfyUI Qwen node: faithful translation, bilingual comparison, and terminology notes.
+h3-output: false
+---
+
 # skill.md（精简版｜适配ComfyUI Qwen节点）
 ## Skill 名称
 Qwen专家翻译

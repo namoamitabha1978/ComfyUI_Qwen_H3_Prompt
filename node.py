@@ -25,10 +25,12 @@ from .skills import (
     SKILL_NAMES,
     detect_h3_mode,
     discover_skill_registry,
+    explicitly_requests_silence,
     mode_router_prompt,
     output_issues,
     parse_mode_selection,
     parse_skill_selection,
+    resolve_h3_output,
     router_prompt,
     system_prompt,
 )
@@ -343,7 +345,7 @@ class QwenH3Prompt(io.ComfyNode):
                         refresh_button=True,
                         control_after_refresh="first",
                     ),
-                    tooltip="Auto routes across bundled and custom Skills, or choose one directly. Click the refresh button to re-scan the skills/ and custom_skills/ directories for newly added Skills without restarting ComfyUI.",
+                    tooltip="Auto routes across bundled and custom Skills, or choose one directly. Every Skill still returns one complete H3 prompt by default; a Skill that declares `h3-output: false` keeps its own output format instead. Click the refresh button to re-scan the skills/ and custom_skills/ directories for newly added Skills without restarting ComfyUI.",
                 ),
                 io.Float.Input(
                     "duration",
@@ -495,6 +497,20 @@ class QwenH3Prompt(io.ComfyNode):
                         "显存占用；off：兼容性最好但更慢（且会同时关闭量化 KV 缓存，内存占用更高）。"
                     ),
                 ),
+                io.Combo.Input(
+                    "h3_output",
+                    options=["auto", "on", "off"],
+                    default="auto",
+                    advanced=True,
+                    tooltip=(
+                        "最终输出是否按 H3 提示词契约生成。\n"
+                        "auto（默认）：跟随所选技能——技能未声明 h3-output: false 时输出 H3 提示词，"
+                        "声明了该开关的技能按自身格式输出。\n"
+                        "on：强制 H3 提示词，字段、字段顺序、模式首行指令、音频段与时间戳校验全部生效；"
+                        "给翻译、图片等非视频技能临时套用 H3 结构时用。\n"
+                        "off：强制自由格式，不加 H3 指南、不做 H3 校验，仅保留空输出检查。"
+                    ),
+                ),
                 io.Autogrow.Input(
                     "reference_images",
                     optional=True,
@@ -548,7 +564,8 @@ class QwenH3Prompt(io.ComfyNode):
         fit_target_mib,
         n_gpu_layers,
         flash_attention,
-        force_unload_model,
+        force_unload_model=True,
+        h3_output="auto",
         reference_images=None,
         reference_videos=None,
     ) -> io.NodeOutput:
@@ -572,6 +589,9 @@ class QwenH3Prompt(io.ComfyNode):
         if n_gpu_layers not in ("auto", "-1"):
             LOGGER.info("[Qwen H3] Normalizing n_gpu_layers=%r to 'auto'", n_gpu_layers)
             n_gpu_layers = "auto"
+        if h3_output not in ("auto", "on", "off"):
+            LOGGER.info("[Qwen H3] Normalizing h3_output=%r to 'auto'", h3_output)
+            h3_output = "auto"
         try:
             context_size = int(context_size)
             fit_target_mib = int(fit_target_mib)
@@ -603,6 +623,7 @@ class QwenH3Prompt(io.ComfyNode):
                 video_sample_frames_per_sec,
             )
             mode = detect_h3_mode(len(images), len(videos))
+            complete_silence = explicitly_requests_silence(prompt)
             model = _resolve_model(llm_model)
             projector = _resolve_model(vision_model)
             settings = _sampling_settings(think_mode)
@@ -617,10 +638,11 @@ class QwenH3Prompt(io.ComfyNode):
                 settings["repetition_penalty"],
             )
             LOGGER.info(
-                "[Qwen H3] Multimodal input parsed | images=%d | videos=%d | initial_mode=%s | elapsed %.2f s",
+                "[Qwen H3] Multimodal input parsed | images=%d | videos=%d | initial_mode=%s | complete_silence=%s | elapsed %.2f s",
                 len(images),
                 len(videos),
                 mode or "automatic",
+                complete_silence,
                 time.perf_counter() - stage_started,
             )
 
@@ -738,13 +760,21 @@ class QwenH3Prompt(io.ComfyNode):
                         selected,
                     )
 
+                h3_contract = resolve_h3_output(selected, h3_output)
                 messages = [
                     {
                         "role": "system",
-                        "content": system_prompt(selected, mode, duration),
+                        "content": system_prompt(selected, mode, duration, h3_output=h3_contract),
                     },
                     {"role": "user", "content": content},
                 ]
+                LOGGER.info(
+                    "[Qwen H3] System prompt ready | skill=%s | h3_output=%s (option=%s) | silent_request=%s",
+                    selected,
+                    h3_contract,
+                    h3_output,
+                    complete_silence,
+                )
                 stage_started = time.perf_counter()
                 LOGGER.info(
                     "[Qwen H3] Inference started | mode=%s | skill=%s | max_tokens=%d",
@@ -769,11 +799,17 @@ class QwenH3Prompt(io.ComfyNode):
                     time.perf_counter() - stage_started,
                 )
 
-                LOGGER.info("[Qwen H3] Validating node output")
+                LOGGER.info(
+                    "[Qwen H3] Validating node output | h3_output=%s | option=%s",
+                    h3_contract,
+                    h3_output,
+                )
                 issues = output_issues(
                     result,
                     mode,
                     duration,
+                    require_complete_silence=complete_silence and h3_contract,
+                    validate_h3=h3_contract,
                 )
                 if issues:
                     LOGGER.warning(
@@ -782,16 +818,25 @@ class QwenH3Prompt(io.ComfyNode):
                         "; ".join(issues),
                     )
                     stage_started = time.perf_counter()
+                    if h3_contract:
+                        repair_instruction = (
+                            "Repair the output. Return exactly one complete final H3 video prompt only. "
+                            "Remove every preface, workflow description, question, clarification, confirmation, "
+                            "approval gate, option list, and next-step request. Omit unsupported optional elements "
+                            "instead of asking about them. Problems: " + "; ".join(issues)
+                        )
+                    else:
+                        repair_instruction = (
+                            "Repair the output and return the complete requested content only. "
+                            "Do not add a wrapper or impose an output schema that the selected Skill does not "
+                            "request. Problems: " + "; ".join(issues)
+                        )
                     repair_messages = [
                         *messages,
                         {"role": "assistant", "content": result},
                         {
                             "role": "user",
-                            "content": (
-                                "Repair the output and return the complete requested content only. "
-                                "Do not add a wrapper or impose an output schema that the selected Skill does not "
-                                "request. Problems: " + "; ".join(issues)
-                            ),
+                            "content": repair_instruction,
                         },
                     ]
                     result, repair_usage = server.chat(
@@ -812,13 +857,22 @@ class QwenH3Prompt(io.ComfyNode):
                         result,
                         mode,
                         duration,
+                        require_complete_silence=complete_silence and h3_contract,
+                        validate_h3=h3_contract,
                     )
                     if remaining:
                         raise RuntimeError(
-                            "Qwen output still fails the basic output contract: "
+                            (
+                                "Qwen output still violates the final H3 prompt contract: "
+                                if h3_contract
+                                else "Qwen output still fails the basic output contract: "
+                            )
                             + "; ".join(remaining)
                         )
-                LOGGER.info("[Qwen H3] Node output validation passed")
+                LOGGER.info(
+                    "[Qwen H3] Node output validation passed | h3_output=%s",
+                    h3_contract,
+                )
 
                 content = None
                 messages = None

@@ -13,9 +13,32 @@ https://github.com/T8mars/comfyui-minimax-h3-prompt-enhancer-T8
 
 `h3-prompt-writing` 官方声明可直接移植。其余 Skill 原本依赖 MiniMax Hub 的画布、选择卡和媒体生成工具。本节点把 Skill 内容作为本地模型指导，Skill 可以输出符合 H3 定义的 prompt。    
 
+### 默认输出始终是 H3 提示词
+
+无论选择官方 Skill、第三方 Skill 还是 `auto`，本节点都把所选 Skill 当作创作与领域指导，随后统一附加对应的 H3 格式指南（`base-en.txt` 或 `ref-en.txt`）与本地输出契约。最终结果必须是一条完整的 H3 提示词：不提问、不给方案清单、不要求确认、不输出 intake form 或 next steps。
+
+节点会按 H3 契约校验输出：核心字段是否齐全与顺序正确、模式首行指令是否正确、镜头时间戳是否严格递增且不超过总时长、显式要求完全静音时两段音频字段是否为 `N/A`。校验只针对结构与格式，不改写创意内容；不合格自动修复一次，仍不合格则报错。
+
+### 非视频 Skill 的退出机制
+
+图片改写、翻译、音乐等本身不产出视频提示词的 Skill，可以在 `SKILL.md` front matter 或 `meta.yaml` 里声明 `h3-output: false`（`meta.yaml` 键名为 `h3_output`）。声明后该 Skill 按自身格式返回，不附加 H3 指南、不做 H3 校验。仓库自带的 `qwen-llm-translate`、`qwen-image-2.1-text2image`、`qwen-image-2.1-edit`、`yue2-music` 已经这样声明；其余 Skill 默认仍走 H3 输出。
+
+### 节点上的手动开关 `h3_output`
+
+节点「高级」设置里有 `h3_output` 三态选项，只影响本次运行，不改动任何技能文件：
+
+| 值 | 行为 |
+|-|-|
+| `auto`（默认） | 跟随所选技能：技能未声明退出就是 H3 输出，声明了就是自由格式。旧工作流保持此行为。 |
+| `on` | 不论技能怎么声明，本次强制 H3 提示词，字段/顺序/首行指令/音频段/时间戳校验全部生效。 |
+| `off` | 本次强制自由格式，不加 H3 指南、不做 H3 校验，只保留空输出检查。 |
+
+所以同一个翻译/图片技能，想让它按 H3 结构输出时把 `h3_output` 设为 `on` 即可，不需要改技能文件。
+
+
 与 MiniMax H3 官方 Skills 不同，本节点所使用的 Qwen3.8-27B GGUF 模型不具备分析声音的能力，不能准确提取已有音乐的旋律、BPM、歌词、音色或节拍点。有关声音的提示词只是“创作声音的描述”，不是分析或复刻参考音频。    
 
-输出格式和交互行为由所选 Skill 与用户请求决定。节点只执行一次本地推理，不会额外包装、改写或按 H3 结构修复模型输出。
+节点只执行一次本地推理，不额外包装或改写创意内容；但会按 H3 输出契约做结构校验，并在不合格时自动修复一次（见上文「默认输出始终是 H3 提示词」）。
 
 ## 安装节点
 使用ComfyUI Manager安装， 或使用以下命令手动安装:
@@ -208,12 +231,14 @@ python install_runtime.py --backend cuda --build-from-source
 - `reference_videos`：动态添加 0-3 路 IMAGE 批次，内部固定按 24 fps 计算时长和采样时间。
 - `video_sample_frames_per_sec`：每路参考视频每秒抽取的帧数，默认值为 2。
 - `force unload model`：默认开启。开启时每次完成后终止内置 llama-server服务并强制清理内存和显存；关闭时保留模型供下一次运行复用。发生错误时无论选项状态都会强制释放。
+- `h3_output`：高级选项，`auto`（默认）/ `on` / `off`。`auto` 跟随所选 Skill 的声明；`on` 强制本次输出 H3 提示词并执行全部结构校验；`off` 强制自由格式并跳过 H3 校验。只影响当前运行，不改动技能文件；旧工作流保持 `auto`。
 
 ### 自定义 Skill
 
 在 `custom_skills/` 下为 Skill 建立独立子目录，并至少放入一个 `SKILL.md`。
 - Skill ID 只能使用小写字母、数字、点、下划线和连字符，不能使用 `auto`，也不能与 MiniMax H3 官方 skills 重名。
 - 节点只把 skill 作为 Qwen 的提示词指导，不会执行第三方 Skill 声明的脚本、工具、网络调用、Canvas 流程或审批卡片。
+- 新 Skill 默认按 H3 输出：节点会自动附加 H3 格式指南与输出契约，并校验字段、顺序、模式首行指令、时间戳和音频段。本身不是视频提示词的 Skill（翻译、图片、音乐等）在 `SKILL.md` front matter 写 `h3-output: false`（或 `meta.yaml` 写 `h3_output: false`）即可退出 H3 结构；临时覆盖可用节点的 `h3_output` 选项。
 
 ### 图片输入与模式路由
 

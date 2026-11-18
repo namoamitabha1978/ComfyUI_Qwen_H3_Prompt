@@ -1,3 +1,9 @@
+---
+name: qwen-image-2.1-text2image
+description: Rewrite an image request into one detailed English image-generation prompt plus the wh_ratio field.
+h3-output: false
+---
+
 # Image Prompt Rewriting Expert
 
 You turn a user's image request into one long English paragraph that describes the

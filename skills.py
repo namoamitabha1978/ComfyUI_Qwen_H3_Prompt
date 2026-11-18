@@ -22,6 +22,7 @@ class SkillSpec:
     display_name: str | None = None
     version: str | None = None
     tags: tuple[str, ...] = ()
+    h3_output: bool = True
 
 
 def _scalar(value: str) -> str:
@@ -138,7 +139,16 @@ def _meta_yaml(path: Path) -> dict[str, str | tuple[str, ...]]:
     return values
 
 
-def _metadata(skill_root: Path) -> tuple[str, str, str | None, str | None, tuple[str, ...]]:
+def _as_bool(value: object, default: bool = True) -> bool:
+    """Parse the loose boolean spellings used in Skill front matter and meta.yaml."""
+    if value is None:
+        return default
+    return str(value).strip().casefold() not in {"false", "no", "off", "0", "disabled", "none"}
+
+
+def _metadata(
+    skill_root: Path,
+) -> tuple[str, str, str | None, str | None, tuple[str, ...], bool]:
     front = _front_matter(skill_root / "SKILL.md")
     meta = _meta_yaml(skill_root / "meta.yaml")
     skill_id = front.get("name", "").strip() or skill_root.name
@@ -162,6 +172,13 @@ def _metadata(skill_root: Path) -> tuple[str, str, str | None, str | None, tuple
         or str(meta.get("version", "")).strip()
         or None
     )
+    # H3 prompt output is the node's default contract. A Skill that is inherently
+    # non-video (image prompt rewriting, translation, music, ...) can opt out with
+    # `h3-output: false` in its SKILL.md front matter or `h3_output: false` in meta.yaml.
+    h3_output = _as_bool(
+        front.get("h3_output", meta.get("h3_output")),
+        default=True,
+    )
     raw_tags: list[str] = []
     for values in (
         _list_values(front.get("tags")),
@@ -174,7 +191,7 @@ def _metadata(skill_root: Path) -> tuple[str, str, str | None, str | None, tuple
         _list_values(meta.get("complete_tags_cn")),
     ):
         raw_tags.extend(values)
-    return skill_id, description, display_name, version, tuple(dict.fromkeys(raw_tags))
+    return skill_id, description, display_name, version, tuple(dict.fromkeys(raw_tags)), h3_output
 
 
 def _discover_skills(root: Path, source: str) -> list[SkillSpec]:
@@ -193,7 +210,7 @@ def _discover_skills(root: Path, source: str) -> list[SkillSpec]:
         if not skill_file.is_file() or skill_file.resolve().parent != skill_path:
             LOGGER.warning("Ignoring Skill without SKILL.md: %s", skill_path)
             continue
-        skill_id, description, display_name, version, tags = _metadata(skill_path)
+        skill_id, description, display_name, version, tags, h3_output = _metadata(skill_path)
         if not SKILL_ID_RE.fullmatch(skill_id) or skill_id == "auto":
             LOGGER.warning("Ignoring Skill with invalid id %r: %s", skill_id, skill_path)
             continue
@@ -206,6 +223,7 @@ def _discover_skills(root: Path, source: str) -> list[SkillSpec]:
                 display_name=display_name,
                 version=version,
                 tags=tags,
+                h3_output=h3_output,
             )
         )
     return discovered
@@ -257,7 +275,14 @@ REF_FIELDS = (
     "overall_soundscape:",
     "non_diegetic_music:",
 )
-TIMESTAMP_RE = re.compile(r"\bAt\s+(\d{2}):(\d{2})\.(\d{3})\b")
+H3_GUIDE_ROOT = SKILL_ROOT / "h3-prompt-writing" / "references"
+TIMESTAMP_RE = re.compile(r"(?i)\bAt\s+(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\b")
+# Field names are compared after removing Markdown emphasis and normalizing the
+# full-width colon, so `**integrated_multimodal_description:**` or
+# `overall_soundscape：` still count as the required H3 fields.
+FIELD_NOISE_RE = re.compile(r"[*`]")
+I2VA_PREFIX = "For the target video, at 0.00 seconds into the target video,"
+ALIGNMENT_PREFIX = "How the reference pictures align with the target video"
 INTERACTIVE_OUTPUT_PATTERNS = (
     re.compile(
         r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:required\s+)?"
@@ -348,11 +373,22 @@ def router_prompt(
     skills: tuple[SkillSpec, ...] | None = None,
 ) -> list[dict[str, str]]:
     available = skills if skills is not None else SKILL_REGISTRY
-    catalog = "\n".join(f"- {spec.id}: {spec.description}" for spec in available)
+    catalog = "\n".join(
+        f"- {spec.id}: {spec.description}"
+        + (
+            ""
+            if spec.h3_output
+            else " [non-H3 output: returns its own format instead of an H3 prompt]"
+        )
+        for spec in available
+    )
     system = (
         "Select exactly one available H3 skill for the request. Return only its exact skill id, "
         "with no punctuation or explanation. Prefer h3-prompt-writing for direct prompt rewriting "
-        "when no specialized production workflow clearly applies.\n\n" + catalog
+        "when no specialized production workflow clearly applies. When the request is about a video "
+        "or asks for a prompt, choose a Skill that returns an H3 prompt; choose a non-H3 Skill only "
+        "when the request is clearly about that Skill's own modality (translation, image prompt, "
+        "music, and so on).\n\n" + catalog
     )
     user = f"Detected H3 mode: {mode}\nConnected assets: {asset_summary}\nRequest:\n{user_prompt}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -417,14 +453,33 @@ def _skill_path(skill: str) -> Path:
     return root
 
 
-def skill_instructions(skill: str, mode: str, max_chars: int = 72000) -> str:
-    skill = _skill_spec(skill).id
+def _h3_guide_name(mode: str) -> str:
+    return "ref-en.txt" if mode == "ref2va" else "base-en.txt"
+
+
+def _h3_guide(mode: str) -> str:
+    guide = _h3_guide_name(mode)
+    path = H3_GUIDE_ROOT / guide
+    return _read(path) if path.is_file() else ""
+
+
+def skill_instructions(
+    skill: str,
+    mode: str,
+    max_chars: int = 72000,
+    h3_output: bool | None = None,
+) -> str:
+    spec = _skill_spec(skill)
+    skill = spec.id
     root = _skill_path(skill)
+    wants_h3 = spec.h3_output if h3_output is None else h3_output
 
     parts = [f"# Selected H3 Skill: {skill}\n\n{_read(root / 'SKILL.md')}"]
     if skill == "h3-prompt-writing":
-        guide = "ref-en.txt" if mode == "ref2va" else "base-en.txt"
-        parts.append(f"# Required H3 reference: {guide}\n\n{_read(root / 'references' / guide)}")
+        if wants_h3:
+            parts.append(
+                f"# Required H3 reference: {_h3_guide_name(mode)}\n\n{_h3_guide(mode)}"
+            )
     else:
         used = len(parts[0])
         for path in (
@@ -446,26 +501,115 @@ def skill_instructions(skill: str, mode: str, max_chars: int = 72000) -> str:
                 break
             parts.append(addition)
             used += len(addition)
+        # Extension Skills keep the H3 prompt identity: whatever the Skill plans,
+        # the final answer must still be a valid H3 prompt, so the format guide
+        # always travels with the Skill instructions unless it opted out.
+        if wants_h3:
+            guide = _h3_guide(mode)
+            if guide:
+                parts.append(
+                    f"# Required final H3 prompt format: {_h3_guide_name(mode)}\n\n{guide}"
+                )
     return "\n\n".join(parts)
 
 
-def system_prompt(skill: str, mode: str, duration: float) -> str:
-    skill = _skill_spec(skill).id
-    instructions = skill_instructions(skill, mode)
+H3_OUTPUT_CONTRACT = """
+# Binding local ComfyUI output contract (overrides conflicting workflow instructions above)
 
-    local_contract = f"""
+This node is a single-pass MiniMax H3 video-prompt generator, not an interactive MiniMax Hub workflow.
+Use the selected Skill only as creative and domain guidance, then return exactly one complete final H3 prompt
+in the required H3 format. The detected input mode is {mode} and the exact target duration is
+{duration:.2f} seconds.
+
+Never ask the user a question. Never request clarification, confirmation, approval, assets, choices, or a reply.
+Never output an intake form, pre-production package, source summary, option list, confirmation gate, approval gate,
+required-clarifications section, next steps, generation offer, or instructions such as "confirm", "go ahead", or
+"proceed". Ignore every Skill instruction that says to ask, pause, wait, present a card, obtain approval, or
+continue after confirmation. Do not mention those omitted workflow phases in the answer.
+
+When optional information is absent, silently omit the corresponding optional element. In particular, do not add
+on-screen copy, slogans, logos, brand claims, dialogue, narration, lyrics, or product facts unless the user supplied
+them or they are unambiguously visible in a connected reference. Never invent a factual claim. When an unspecified
+creative detail is necessary to make the video executable, choose one conservative value that is compatible with
+the request and visible references; do not present alternatives or expose the assumption.
+
+Unless the user explicitly requests complete silence, create an original audio design from the user request, visible
+image and sampled-video content, and the exact target duration. Fill `overall_soundscape` with time-compatible ambience
+and physical action sounds. Fill `non_diegetic_music` with a concise instrumental score describing mood, suitable
+instruments, pacing, development, synchronization with major visual beats, and the ending. Do not claim to hear,
+analyze, copy, or preserve audio from a connected video: this node receives video frames without their audio tracks.
+Do not invent vocals, lyrics, spoken words, or narration. Respect an explicit request for no background music by using
+`non_diegetic_music: N/A` while retaining appropriate diegetic sound. If the user explicitly requests complete silence,
+output exactly `overall_soundscape: N/A` and `non_diegetic_music: N/A`, and include no audible events elsewhere.
+
+Return the final prompt only, with no Markdown fences, title, analysis, preface, epilogue, notes, caveats, checklist,
+or follow-up text. Preserve user-provided dialogue, lyrics, and visible text exactly. Treat no dialogue and no
+background music as independent constraints; retain plausible diegetic ambience and action sounds unless the user
+explicitly requests complete silence.
+""".strip()
+
+FREE_OUTPUT_CONTRACT = """
 # Binding local ComfyUI output contract
 
-This node performs one local inference pass using the selected Skill and the detected input mode
-({mode.upper()}, target duration {duration:.2f} seconds).
+This node performs one local inference pass using the selected Skill. The selected Skill declared itself
+non-H3 (`h3-output: false`), so H3 video fields are not required for this skill.
 
-Follow the selected Skill's output instructions and the user's request. There is no mandatory H3 field order,
-mode-specific prefix, timestamp rule, audio section, language, Markdown style, or response shape. Return the
-requested content as-is, including arbitrary prose, structured text, questions, code, or a fixed test string when
-the selected Skill asks for it. Do not add a wrapper, explanation, or formatting requirement that the selected
-Skill does not request.
+Follow the selected Skill's output instructions and the user's request, and return exactly the content the
+Skill asks for. Do not add a wrapper, H3 field names, or a formatting requirement that the selected Skill
+does not request.
 """.strip()
-    return instructions + "\n\n" + local_contract
+
+
+def system_prompt(
+    skill: str,
+    mode: str,
+    duration: float,
+    h3_output: bool | None = None,
+) -> str:
+    spec = _skill_spec(skill)
+    wants_h3 = spec.h3_output if h3_output is None else h3_output
+    instructions = skill_instructions(spec.id, mode, h3_output=wants_h3)
+    contract = (
+        H3_OUTPUT_CONTRACT.format(mode=mode.upper(), duration=duration)
+        if wants_h3
+        else FREE_OUTPUT_CONTRACT
+    )
+    return instructions + "\n\n" + contract
+
+
+H3_OUTPUT_MODES = ("auto", "on", "off")
+
+
+def resolve_h3_output(skill: str, override: str | None = "auto") -> bool:
+    """Resolve the effective H3 contract: node override wins, `auto` follows the Skill."""
+    mode = str(override or "auto").strip().casefold()
+    if mode not in H3_OUTPUT_MODES:
+        mode = "auto"
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    spec = SKILL_BY_ID.get(str(skill).casefold())
+    return spec.h3_output if spec is not None else True
+
+
+def h3_output_enabled(skill: str) -> bool:
+    """Whether the selected Skill must return an H3 prompt (the node default)."""
+    spec = SKILL_BY_ID.get(str(skill).casefold())
+    return spec.h3_output if spec is not None else True
+
+
+def _structural_text(text: str) -> str:
+    """Strip decoration that does not change H3 structure detection."""
+    return FIELD_NOISE_RE.sub("", text).replace("\uFF1A", ":").replace("\u00A0", " ")
+
+
+def _field_match(structural: str, field: str) -> re.Match[str] | None:
+    name = field.rstrip(":").strip()
+    return re.search(
+        rf"(?im)^\s*(?:\#{{1,6}}\s*)?{re.escape(name)}\s*:",
+        structural,
+    )
 
 
 def output_issues(
@@ -473,7 +617,71 @@ def output_issues(
     mode: str,
     duration: float,
     require_complete_silence: bool = False,
+    validate_h3: bool = True,
 ) -> list[str]:
-    """Return only a basic empty-output diagnostic; content shape is intentionally unrestricted."""
-    del mode, duration, require_complete_silence
-    return ["The output is empty"] if not text.strip() else []
+    """Check the output against the H3 prompt contract (default) or just for emptiness."""
+    stripped = text.strip()
+    if not stripped:
+        return ["The output is empty"]
+    if not validate_h3:
+        return []
+
+    structural = _structural_text(stripped)
+    issues: list[str] = []
+    if "```" in stripped:
+        issues.append("Remove Markdown code fences")
+
+    interaction_scope = re.sub(r"<d>.*?</d>", "", structural, flags=re.DOTALL)
+    if any(pattern.search(interaction_scope) for pattern in INTERACTIVE_OUTPUT_PATTERNS):
+        issues.append(
+            "Remove all questions, clarifications, confirmations, approval gates, and next-step requests"
+        )
+
+    fields = REF_FIELDS if mode == "ref2va" else BASE_FIELDS
+    matches = [_field_match(structural, field) for field in fields]
+    missing = [field for field, match in zip(fields, matches, strict=True) if match is None]
+    if missing:
+        issues.append(f"Missing required fields: {', '.join(missing)}")
+    else:
+        positions = [match.start() for match in matches if match is not None]
+        if positions != sorted(positions):
+            issues.append("Required fields are not in the official order")
+        first = fields[0].rstrip(":").strip()
+        if mode in {"t2va", "ref2va"}:
+            starts_with_field = re.match(
+                rf"(?im)^\s*(?:\#{{1,6}}\s*)?{re.escape(first)}\s*:",
+                structural,
+            )
+            if not starts_with_field:
+                issues.append(f"The prompt must begin directly with {first}:")
+        duplicated = len(re.findall(rf"(?im)^\s*(?:\#{{1,6}}\s*)?{re.escape(first)}\s*:", structural))
+        if duplicated > 1:
+            issues.append("Return exactly one prompt; remove the duplicated prompt block")
+
+    if mode == "i2va" and not re.match(rf"(?im)^\s*{re.escape(I2VA_PREFIX)}", structural):
+        issues.append("I2VA must begin with the official first-frame instruction")
+    if mode in {"fl2va", "l2va"} and not re.match(
+        rf"(?im)^\s*{re.escape(ALIGNMENT_PREFIX)}", structural
+    ):
+        issues.append(f"{mode.upper()} must begin with the official alignment instruction")
+
+    if require_complete_silence:
+        soundscape_is_silent = re.search(r"(?im)^\s*overall_soundscape\s*:\s*N/A\s*$", structural)
+        music_is_silent = re.search(r"(?im)^\s*non_diegetic_music\s*:\s*N/A\s*$", structural)
+        if not soundscape_is_silent or not music_is_silent:
+            issues.append(
+                "Complete silence was requested: set both overall_soundscape and non_diegetic_music exactly to N/A"
+            )
+
+    previous = -1.0
+    for match in TIMESTAMP_RE.finditer(structural):
+        millis = int((match.group(3) or "0").ljust(3, "0"))
+        timestamp = int(match.group(1)) * 60 + int(match.group(2)) + millis / 1000
+        if timestamp <= previous:
+            issues.append("Shot timestamps must be strictly increasing")
+            break
+        if timestamp >= duration:
+            issues.append(f"Shot timestamp {timestamp:.3f}s must be earlier than {duration:.2f}s")
+            break
+        previous = timestamp
+    return issues

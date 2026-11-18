@@ -21,8 +21,26 @@ custom_skills/
 
 The node reads Markdown and text references as model guidance. It does not execute
 scripts, tools, network calls, Canvas workflows, or approval gates declared by a
-third-party Skill. The selected Skill may return an H3 prompt or any other content;
-there is no node-level H3 field or formatting requirement.
+third-party Skill.
+
+H3 prompt output is the node default. Every Skill that does not opt out has the H3
+format guide (`skills/h3-prompt-writing/references/base-en.txt` or `ref-en.txt`)
+and the binding H3 output contract appended after its own instructions, and its
+answer is validated against that contract (required fields and order, mode
+prefix, shot timestamps, audio sections).
+
+A Skill that is inherently non-video — image prompt rewriting, translation, music,
+and so on — opts out with `h3-output: false` in its `SKILL.md` front matter, or
+`h3_output: false` in `meta.yaml`. An opted-out Skill is returned in its own shape,
+with no H3 fields, no H3 guide, and no H3 validation.
+
+The node's advanced `h3_output` option (`auto` / `on` / `off`, default `auto`) overrides
+this per run without editing any Skill file: `auto` follows the declaration above,
+`on` forces the H3 contract, `off` forces the free-form contract.
+
+The bundled `qwen-llm-translate`, `qwen-image-2.1-text2image`, `qwen-image-2.1-edit`,
+and `yue2-music` are already declared as opted-out. Copy their front matter when you
+add a similar non-video Skill.
 
 The included `example_custom_skill/` is a minimal discovery test. Select
 `example_custom_skill` in the node to confirm that the custom directory is visible
